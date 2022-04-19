@@ -14,6 +14,7 @@ struct proc *initproc;
 
 int nextpid = 1;
 struct spinlock pid_lock;
+uint ticks0 = 0;
 
 extern void forkret(void);
 static void freeproc(struct proc *p);
@@ -442,6 +443,15 @@ scheduler(void)
   
   c->proc = 0;
   for(;;){
+    acquire(&tickslock);
+    if(ticks<ticks0){
+      release(&tickslock);
+      continue;
+    } else{
+      release(&tickslock);
+      ticks0=0;
+    }
+    
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
 
@@ -653,4 +663,30 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+int pause_system(int seconds){
+  printf("pause called\n");
+  acquire(&tickslock);
+  ticks0 = ticks + (10 * seconds);
+  release(&tickslock);
+  return 0;
+}
+
+int kill_system(void){
+  struct proc *p;
+
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    if(p->pid > 2){
+      p->killed = 1;
+      if(p->state == SLEEPING){
+        // Wake process from sleep().
+        p->state = RUNNABLE;
+      }
+    }
+    release(&p->lock);
+  }
+  printf("all killed!\n");
+  return 0;
 }
