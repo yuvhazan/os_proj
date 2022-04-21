@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "limits.h"
 
 struct cpu cpus[NCPU];
 
@@ -15,6 +16,7 @@ struct proc *initproc;
 int nextpid = 1;
 struct spinlock pid_lock;
 uint ticks0 = 0;
+uint nextProc = 0;
 
 extern void forkret(void);
 static void freeproc(struct proc *p);
@@ -243,7 +245,10 @@ userinit(void)
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
 
-  p->state = RUNNABLE;
+  make_process_runnable(p);
+  #if SCHEDFLAG == FCFS
+    p->last_runnable_time = INT_MAX;
+  #endif
 
   release(&p->lock);
 }
@@ -313,7 +318,7 @@ fork(void)
   release(&wait_lock);
 
   acquire(&np->lock);
-  np->state = RUNNABLE;
+  make_process_runnable(np);
   release(&np->lock);
 
   return pid;
@@ -438,7 +443,7 @@ wait(uint64 addr)
 void
 scheduler(void)
 {
-  struct proc *p;
+  struct proc *p = 0;
   struct cpu *c = mycpu();
   
   c->proc = 0;
@@ -454,22 +459,26 @@ scheduler(void)
     
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
+    p = get_process_by_flag();
 
     for(p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
-      if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
+      if(p){
+        acquire(&p->lock);
+        if(p->state == RUNNABLE) {
+          // Switch to chosen process.  It is the process's job
+          // to release its lock and then reacquire it
+          // before jumping back to us.
+          p->state = RUNNING;
+          p->last_runnable_time = ticks - p->last_tick;
+          c->proc = p;
+          swtch(&c->context, &p->context);
 
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
+          // Process is done running for now.
+          // It should have changed its p->state before coming back.
+          c->proc = 0;
+        }
+        release(&p->lock);
       }
-      release(&p->lock);
     }
   }
 }
@@ -507,7 +516,7 @@ yield(void)
 {
   struct proc *p = myproc();
   acquire(&p->lock);
-  p->state = RUNNABLE;
+  make_process_runnable(p);
   sched();
   release(&p->lock);
 }
@@ -575,7 +584,7 @@ wakeup(void *chan)
     if(p != myproc()){
       acquire(&p->lock);
       if(p->state == SLEEPING && p->chan == chan) {
-        p->state = RUNNABLE;
+        make_process_runnable(p);
       }
       release(&p->lock);
     }
@@ -663,6 +672,67 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+struct proc* get_process_by_flag() {
+  #if SCHEDFLAG == FCFS
+    struct proc *p = get_fcfs_process();
+    return p;
+  #elif SCHEDFLAG == SJF
+    // struct proc *p = get_sjf_process();
+    // return p;
+    return 0;
+  #else
+    struct proc *p = get_default_process();
+    return p;
+  #endif
+}
+
+struct proc* get_default_process() {
+  for(int i = 0; i<NPROC; i++){
+    struct proc *p = &proc[nextProc];
+    nextProc = (nextProc + 1) % NPROC;
+
+    acquire(&p->lock);
+    if(p->state == RUNNABLE) {
+      release(&p->lock);
+      return p;
+    }
+    release(&p->lock);
+  }
+  return 0;
+}
+
+struct proc* get_fcfs_process() {
+  struct proc *p;
+  int min_runnable_time = INT_MIN;
+  struct proc *min_proc = 0;
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->state == RUNNABLE) {
+      if(p->last_runnable_time < min_runnable_time) {
+        min_runnable_time = p->last_runnable_time;
+        min_proc = p;
+      }
+    }
+    release(&p->lock);
+  }
+  return min_proc;
+}
+
+// struct proc* get_sjf_process() {
+
+// }
+
+void make_process_runnable(struct proc* p) {
+  #if SCHEDFLAG == FCFS
+    acquire(&tickslock);
+    p->last_tick = ticks;
+    release(&tickslock);
+    p->state = RUNNABLE;
+  #else
+    p->state = RUNNABLE;
+  #endif
 }
 
 int pause_system(int seconds){

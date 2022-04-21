@@ -105,4 +105,11 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  uint64 last_runnable_time;   // FCFS
+  uint64 last_tick;
 };
+
+struct proc* get_process_by_flag();
+struct proc* get_default_process();
+struct proc* get_fcfs_process();
+void make_process_runnable(struct proc* p);
