@@ -64,7 +64,9 @@ CFLAGS += -I.
 CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
 CFLAGS += -D SCHEDFLAG=$(SCHEDFLAG)
 
-ifndef SCHEDFLAG
+SCHEDFLAG_TYPES = DEFAULT FCFS SJF
+SCHEDFLAG_VAR = $(filter $(SCHEDFLAG), $(SCHEDFLAG_TYPES))
+ifeq ($(SCHEDFLAG_VAR),)
 	SCHEDFLAG = DEFAULT
 endif
 
