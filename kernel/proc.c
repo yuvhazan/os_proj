@@ -19,6 +19,10 @@ uint ticks0 = 0;
 uint nextProc = 0;
 
 int rate = 5;
+uint64 sleeping_processes_mean = 0;
+uint64 running_processes_mean = 0;
+uint64 runnable_processes_mean = 0;
+int num_of_processes = 0;
 
 extern void forkret(void);
 static void freeproc(struct proc *p);
@@ -124,7 +128,16 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
-
+  
+  #if SCHEDFLAG == FCFS
+    p->last_runnable_time = INT_MAX;
+  #elif SCHEDFLAG == SJF
+    p->last_ticks = 0;
+    p->mean_ticks = 0;
+  #endif
+  p->sleeping_time = 0;
+  p->running_time = 0;
+  p->runnable_time = 0;
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     freeproc(p);
@@ -145,7 +158,7 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
-
+  
   return p;
 }
 
@@ -381,7 +394,11 @@ exit(int status)
 
   p->xstate = status;
   p->state = ZOMBIE;
-
+  running_processes_mean = (num_of_processes * running_processes_mean + p->running_time) / (num_of_processes + 1);
+  runnable_processes_mean = (num_of_processes * runnable_processes_mean + p->runnable_time) / (num_of_processes + 1);
+  sleeping_processes_mean = (num_of_processes * sleeping_processes_mean + p->sleeping_time) / (num_of_processes + 1);
+  num_of_processes += 1;
+  //printf("running: %d, runnable: %d, sleeping: %d\n", running_processes_mean, runnable_processes_mean, sleeping_processes_mean);
   release(&wait_lock);
 
   // Jump into the scheduler, never to return.
@@ -774,4 +791,22 @@ int kill_system(void){
   }
   printf("all killed!\n");
   return 0;
+}
+
+void update_process_params() {
+  struct proc *p;
+  
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->state == SLEEPING) {
+      p->sleeping_time += 1;
+    }
+    if(p->state == RUNNABLE) {
+      p->runnable_time += 1;
+    }
+    if(p->state == RUNNING) {
+      p->running_time += 1;
+    }
+    release(&p->lock);
+  }
 }

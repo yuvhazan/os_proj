@@ -108,9 +108,14 @@ struct proc {
   uint64 last_runnable_time;   // FCFS
   uint64 mean_ticks;           // SJF
   uint64 last_ticks;           // SJF
+  uint64 sleeping_time;        // Task 4
+  uint64 runnable_time;        // Task 4
+  uint64 running_time;         // Task 4
 };
 
 struct proc* get_process_by_flag();
 struct proc* get_default_process();
 struct proc* get_fcfs_process();
+struct proc* get_sjf_process();
 void make_process_runnable(struct proc* p);
+void update_process_params();
