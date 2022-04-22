@@ -18,6 +18,8 @@ struct spinlock pid_lock;
 uint ticks0 = 0;
 uint nextProc = 0;
 
+int rate = 5;
+
 extern void forkret(void);
 static void freeproc(struct proc *p);
 
@@ -248,6 +250,9 @@ userinit(void)
   make_process_runnable(p);
   #if SCHEDFLAG == FCFS
     p->last_runnable_time = INT_MAX;
+  #elif SCHEDFLAG == SJF
+    p->last_ticks = 0;
+    p->mean_ticks = 0;
   #endif
 
   release(&p->lock);
@@ -460,24 +465,28 @@ scheduler(void)
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
     p = get_process_by_flag();
-
-    for(p = proc; p < &proc[NPROC]; p++) {
-      if(p){
-        acquire(&p->lock);
-        if(p->state == RUNNABLE) {
-          // Switch to chosen process.  It is the process's job
-          // to release its lock and then reacquire it
-          // before jumping back to us.
-          p->state = RUNNING;
-          c->proc = p;
-          swtch(&c->context, &p->context);
-
-          // Process is done running for now.
-          // It should have changed its p->state before coming back.
-          c->proc = 0;
-        }
-        release(&p->lock);
+    
+    if(p){
+      acquire(&p->lock);
+      if(p->state == RUNNABLE) {
+        // Switch to chosen process.  It is the process's job
+        // to release its lock and then reacquire it
+        // before jumping back to us.
+        p->state = RUNNING;
+        c->proc = p;
+        #if SCHEDFLAG == SJF
+        p->last_ticks = ticks;
+        #endif
+        swtch(&c->context, &p->context);
+        #if SCHEDFLAG == SJF
+        p->mean_ticks = ((10 - rate) * p->mean_ticks + p->last_ticks * rate) / 10;
+        #endif
+        
+        // Process is done running for now.
+        // It should have changed its p->state before coming back.
+        c->proc = 0;
       }
+      release(&p->lock);
     }
   }
 }
@@ -672,34 +681,14 @@ procdump(void)
     printf("\n");
   }
 }
-
 struct proc* get_process_by_flag() {
   #if SCHEDFLAG == FCFS
-    struct proc *p = get_fcfs_process();
-    return p;
+    return get_fcfs_process();
   #elif SCHEDFLAG == SJF
-    // struct proc *p = get_sjf_process();
-    // return p;
-    return 0;
-  #else
-    struct proc *p = get_default_process();
-    return p;
+    return get_sjf_process();
+  #elif SCHEDFLAG == DEFAULT
+    return get_default_process();
   #endif
-}
-
-struct proc* get_default_process() {
-  for(int i = 0; i<NPROC; i++){
-    struct proc *p = &proc[nextProc];
-    nextProc = (nextProc + 1) % NPROC;
-
-    acquire(&p->lock);
-    if(p->state == RUNNABLE) {
-      release(&p->lock);
-      return p;
-    }
-    release(&p->lock);
-  }
-  return 0;
 }
 
 struct proc* get_fcfs_process() {
@@ -719,9 +708,36 @@ struct proc* get_fcfs_process() {
   return min_proc;
 }
 
-// struct proc* get_sjf_process() {
+struct proc* get_sjf_process() {
+  struct proc *p;
+  int min_mean_ticks = INT_MIN;
+  struct proc *min_proc = 0;
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->state == RUNNABLE) {
+      if(p -> mean_ticks < min_mean_ticks) {
+        min_mean_ticks = p->mean_ticks;
+        min_proc = p;
+      }
+    }
+    release(&p->lock);
+  }
+  return min_proc;
+}
 
-// }
+struct proc* get_default_process() {
+  for(int i = 0; i<NPROC; i++){
+    struct proc *p = &proc[nextProc];
+    nextProc = (nextProc + 1) % NPROC;
+    acquire(&p->lock);
+    if(p->state == RUNNABLE) {
+      release(&p->lock);
+      return p;
+    }
+    release(&p->lock);
+  }
+  return 0;
+}
 
 void make_process_runnable(struct proc* p) {
   #if SCHEDFLAG == FCFS

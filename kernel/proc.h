@@ -106,7 +106,8 @@ struct proc {
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
   uint64 last_runnable_time;   // FCFS
-  uint64 last_tick;
+  uint64 mean_ticks;           // SJF
+  uint64 last_ticks;           // SJF
 };
 
 struct proc* get_process_by_flag();
