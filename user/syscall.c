@@ -34,10 +34,10 @@ void kill_system_dem(int interval, int loop_size) {
     printf("\n");
 }
 
-
 int
 main(int argc, char *argv[])
 {
+    print_stats();
     pause_system_dem(10, 3, 100);
     kill_system_dem(10, 100);
     exit(0);

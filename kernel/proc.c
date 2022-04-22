@@ -810,3 +810,10 @@ void update_process_params() {
     release(&p->lock);
   }
 }
+
+int print_stats(void) {
+  printf("running_processes_mean: %d", running_processes_mean);
+  printf("runnable_processes_mean: %d", runnable_processes_mean);
+  printf("sleeping_processes_mean: %d", sleeping_processes_mean);
+  return 0;
+}
