@@ -469,7 +469,6 @@ scheduler(void)
           // to release its lock and then reacquire it
           // before jumping back to us.
           p->state = RUNNING;
-          p->last_runnable_time = ticks - p->last_tick;
           c->proc = p;
           swtch(&c->context, &p->context);
 
@@ -727,7 +726,7 @@ struct proc* get_fcfs_process() {
 void make_process_runnable(struct proc* p) {
   #if SCHEDFLAG == FCFS
     acquire(&tickslock);
-    p->last_tick = ticks;
+    p->last_runnable_time = ticks;
     release(&tickslock);
     p->state = RUNNABLE;
   #else
