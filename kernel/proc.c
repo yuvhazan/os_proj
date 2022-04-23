@@ -502,7 +502,7 @@ scheduler(void)
         #endif
 
         swtch(&c->context, &p->context);
-        
+
         #if SCHEDFLAG == SJF
         p->mean_ticks = ((10 - rate) * p->mean_ticks + p->last_ticks * rate) / 10;
         #endif
