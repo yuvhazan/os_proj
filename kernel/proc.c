@@ -262,7 +262,9 @@ userinit(void)
 
   make_process_runnable(p);
   #if SCHEDFLAG == FCFS
-    p->last_runnable_time = INT_MAX;
+    acquire(&tickslock);
+    p->last_runnable_time = ticks;
+    release(&tickslock);
   #elif SCHEDFLAG == SJF
     p->last_ticks = 0;
     p->mean_ticks = 0;
@@ -630,7 +632,7 @@ kill(int pid)
       p->killed = 1;
       if(p->state == SLEEPING){
         // Wake process from sleep().
-        p->state = RUNNABLE;
+        make_process_runnable(p);
       }
       release(&p->lock);
       return 0;
@@ -710,7 +712,7 @@ struct proc* get_process_by_flag() {
 
 struct proc* get_fcfs_process() {
   struct proc *p;
-  int min_runnable_time = INT_MIN;
+  int min_runnable_time = INT_MAX;
   struct proc *min_proc = 0;
   for(p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
@@ -718,6 +720,7 @@ struct proc* get_fcfs_process() {
       if(p->last_runnable_time < min_runnable_time) {
         min_runnable_time = p->last_runnable_time;
         min_proc = p;
+        printf("min runnable time: %d\n", min_runnable_time);
       }
     }
     release(&p->lock);
@@ -727,7 +730,7 @@ struct proc* get_fcfs_process() {
 
 struct proc* get_sjf_process() {
   struct proc *p;
-  int min_mean_ticks = INT_MIN;
+  int min_mean_ticks = INT_MAX;
   struct proc *min_proc = 0;
   for(p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
@@ -758,9 +761,7 @@ struct proc* get_default_process() {
 
 void make_process_runnable(struct proc* p) {
   #if SCHEDFLAG == FCFS
-    acquire(&tickslock);
     p->last_runnable_time = ticks;
-    release(&tickslock);
     p->state = RUNNABLE;
   #else
     p->state = RUNNABLE;
@@ -784,7 +785,7 @@ int kill_system(void){
       p->killed = 1;
       if(p->state == SLEEPING){
         // Wake process from sleep().
-        p->state = RUNNABLE;
+        make_process_runnable(p);
       }
     }
     release(&p->lock);
@@ -812,8 +813,6 @@ void update_process_params() {
 }
 
 int print_stats(void) {
-  printf("running_processes_mean: %d", running_processes_mean);
-  printf("runnable_processes_mean: %d", runnable_processes_mean);
-  printf("sleeping_processes_mean: %d", sleeping_processes_mean);
+  printf("running: %d, runnable: %d, sleeping: %d\n", running_processes_mean, runnable_processes_mean, sleeping_processes_mean);
   return 0;
 }
