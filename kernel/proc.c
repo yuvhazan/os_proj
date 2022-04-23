@@ -129,15 +129,18 @@ found:
   p->pid = allocpid();
   p->state = USED;
   
+  // Update measuring fields
+  p->sleeping_time = 0;
+  p->running_time = 0;
+  p->runnable_time = 0;
+
   #if SCHEDFLAG == FCFS
-    p->last_runnable_time = INT_MAX;
+    p->last_runnable_time = 0;
   #elif SCHEDFLAG == SJF
     p->last_ticks = 0;
     p->mean_ticks = 0;
   #endif
-  p->sleeping_time = 0;
-  p->running_time = 0;
-  p->runnable_time = 0;
+  
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     freeproc(p);
@@ -493,10 +496,13 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+
         #if SCHEDFLAG == SJF
         p->last_ticks = ticks;
         #endif
+
         swtch(&c->context, &p->context);
+        
         #if SCHEDFLAG == SJF
         p->mean_ticks = ((10 - rate) * p->mean_ticks + p->last_ticks * rate) / 10;
         #endif
@@ -720,7 +726,6 @@ struct proc* get_fcfs_process() {
       if(p->last_runnable_time < min_runnable_time) {
         min_runnable_time = p->last_runnable_time;
         min_proc = p;
-        printf("min runnable time: %d\n", min_runnable_time);
       }
     }
     release(&p->lock);
