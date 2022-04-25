@@ -22,6 +22,10 @@ int rate = 5;
 uint64 sleeping_processes_mean = 0;
 uint64 running_processes_mean = 0;
 uint64 runnable_processes_mean = 0;
+uint64 program_time = 0;
+uint64 cpu_utilization = 0;
+uint64 start_time;
+
 int num_of_processes = 0;
 
 extern void forkret(void);
@@ -56,6 +60,7 @@ void
 procinit(void)
 {
   struct proc *p;
+  start_time=ticks;
   
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
@@ -403,6 +408,8 @@ exit(int status)
   runnable_processes_mean = (num_of_processes * runnable_processes_mean + p->runnable_time) / (num_of_processes + 1);
   sleeping_processes_mean = (num_of_processes * sleeping_processes_mean + p->sleeping_time) / (num_of_processes + 1);
   num_of_processes += 1;
+  program_time += p->running_time;
+  cpu_utilization = (program_time * 100 )/ (ticks - start_time);
   //printf("running: %d, runnable: %d, sleeping: %d\n", running_processes_mean, runnable_processes_mean, sleeping_processes_mean);
   release(&wait_lock);
 
@@ -475,22 +482,13 @@ scheduler(void)
   
   c->proc = 0;
   for(;;){
-    acquire(&tickslock);
-    if(ticks<ticks0){
-      release(&tickslock);
-      continue;
-    } else{
-      release(&tickslock);
-      ticks0=0;
-    }
-    
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
     p = get_process_by_flag();
     
     if(p){
       acquire(&p->lock);
-      if(p->state == RUNNABLE) {
+      if(p->state == RUNNABLE && ticks>ticks0) {
         // Switch to chosen process.  It is the process's job
         // to release its lock and then reacquire it
         // before jumping back to us.
@@ -778,8 +776,10 @@ int pause_system(int seconds){
   acquire(&tickslock);
   ticks0 = ticks + (10 * seconds);
   release(&tickslock);
+  yield();
   return 0;
 }
+
 
 int kill_system(void){
   struct proc *p;
@@ -818,6 +818,7 @@ void update_process_params() {
 }
 
 int print_stats(void) {
-  printf("running: %d, runnable: %d, sleeping: %d\n", running_processes_mean, runnable_processes_mean, sleeping_processes_mean);
+  printf("running: %d, runnable: %d, sleeping: %d, program_time: %d, cpu_utilization: %d,\n",
+   running_processes_mean, runnable_processes_mean, sleeping_processes_mean, program_time, cpu_utilization);
   return 0;
 }
