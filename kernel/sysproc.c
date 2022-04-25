@@ -117,4 +117,3 @@ sys_print_stats(void)
 {
   return print_stats();
 }
-

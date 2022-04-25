@@ -19,11 +19,11 @@ void env(int size, int interval, char* env_name) {
     }
     for (int i = 0; i < loop_size; i++) {
         if (i % (int)(loop_size / 10e0) == 0) {
-        	if (pid == 0) {
-        		printf("%s %d/%d completed.\n", env_name, i, loop_size);
-        	} else {
-        		printf(" ");
-        	}
+            if (pid == 0) {
+                printf("%s %d/%d completed.\n", env_name, i, loop_size);
+            } else {
+                printf(" ");
+            }
         }
         if (i % interval == 0) {
             result = result * size;

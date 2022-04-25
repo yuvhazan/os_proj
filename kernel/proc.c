@@ -133,7 +133,7 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
-  
+
   // Update measuring fields
   p->sleeping_time = 0;
   p->running_time = 0;
@@ -145,7 +145,7 @@ found:
     p->last_ticks = 0;
     p->mean_ticks = 0;
   #endif
-  
+
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     freeproc(p);
@@ -485,7 +485,7 @@ scheduler(void)
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
     p = get_process_by_flag();
-    
+
     if(p){
       acquire(&p->lock);
       if(p->state == RUNNABLE && ticks>ticks0) {
@@ -504,7 +504,7 @@ scheduler(void)
         #if SCHEDFLAG == SJF
         p->mean_ticks = ((10 - rate) * p->mean_ticks + p->last_ticks * rate) / 10;
         #endif
-        
+
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
@@ -801,7 +801,7 @@ int kill_system(void){
 
 void update_process_params() {
   struct proc *p;
-  
+
   for(p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
     if(p->state == SLEEPING) {
