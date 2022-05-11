@@ -16,6 +16,7 @@ int nextpid = 1;
 struct spinlock pid_lock;
 
 extern void forkret(void);
+extern uint64 cas (volatile void * addr, int expected ,int newval);
 static void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
@@ -88,12 +89,13 @@ myproc(void) {
 int
 allocpid() {
   int pid;
-  
-  acquire(&pid_lock);
-  pid = nextpid;
+  int pid_copy;
+  do{
+    pid_copy = pid;
+    pid = nextpid;
+  } while(!cas(&pid,pid_copy,nextpid+1));
+   
   nextpid = nextpid + 1;
-  release(&pid_lock);
-
   return pid;
 }
 
