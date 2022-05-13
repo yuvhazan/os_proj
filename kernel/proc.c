@@ -246,6 +246,8 @@ userinit(void)
 
   p->state = RUNNABLE;
 
+  p->cpu_id = 0;
+
   release(&p->lock);
 }
 
@@ -311,6 +313,7 @@ fork(void)
 
   acquire(&wait_lock);
   np->parent = p;
+  np->cpu_id = p->cpu_id;
   release(&wait_lock);
 
   acquire(&np->lock);
@@ -656,3 +659,13 @@ procdump(void)
     printf("\n");
   }
 }
+
+int set_cpu(int cpu_num){
+  myproc()->cpu_id = cpu_num;
+  return cpu_num; 
+}
+
+int get_cpu(){
+  return myproc()->cpu_id;
+}
+

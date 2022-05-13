@@ -9,11 +9,9 @@
 #include "kernel/riscv.h"
 
 void test_cas() {
-    for (int i = 0; i < 2; i++) {
-        int parent_pid = getpid();
-        fork();
-        if(getpid()!=parent_pid){
-            printf("ny pid = %d\n",getpid());
+    for (int i = 0; i < 1; i++) {
+        if(fork()!=0){
+            printf("cpu_id=%d\n",get_cpu());
         }
     }
 }
@@ -21,6 +19,8 @@ void test_cas() {
 int
 main(int argc, char *argv[])
 {
+    test_cas();
+    set_cpu(5);
     test_cas();
     exit(0);
 }
