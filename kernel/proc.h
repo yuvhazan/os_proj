@@ -24,6 +24,7 @@ struct cpu {
   struct context context;     // swtch() here to enter scheduler().
   int noff;                   // Depth of push_off() nesting.
   int intena;                 // Were interrupts enabled before push_off()?
+  struct proc *head;          // Head of RUNNABLE list
 };
 
 extern struct cpu cpus[NCPU];
@@ -108,3 +109,6 @@ struct proc {
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
 };
+
+struct proc* remove(struct proc* head, int pid);
+int add(struct proc* head, struct proc *p);
