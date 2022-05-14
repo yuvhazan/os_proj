@@ -9,6 +9,7 @@
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
+struct cpu cpu[NCPU];
 
 struct proc *initproc;
 
@@ -52,6 +53,8 @@ void
 procinit(void)
 {
   struct proc *p;
+  struct cpu *c = mycpu();
+  struct proc dummyHead;
   
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
@@ -65,10 +68,15 @@ procinit(void)
   unused_list.next = 0;
   sleeping_list.next = 0;
   zombie_list.next = 0;
+  
+  initlock(&dummyHead.lock, "proc");
+  c->head = &dummyHead;
+  dummyHead.next = 0;
+
   p->next = 0;
   printf("procinit1\n");
   add(&unused_list, p);
-  printf("procinit2\n");
+  // printf("procinit2\n");
 }
 
 // Must be called with interrupts disabled,
@@ -124,16 +132,16 @@ allocproc(void)
   
   printf("allocproc\n");
   p = remove(&unused_list, -1);
-  printf("allocproc2\n");
+  // printf("allocproc2\n");
   if(p != 0){
-    printf("allocproc3\n");
+    // printf("allocproc3\n");
     if(p->state == UNUSED) {
       goto found;
     } else {
       release(&p->lock);
     }
   }
-  printf("allocproc4\n");
+  // printf("allocproc4\n");
   return 0;
 
 found:
@@ -171,12 +179,12 @@ found:
 static void
 freeproc(struct proc *p)
 {
+  printf("freeproc\n");
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
-  remove(&zombie_list, p->pid);
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -186,6 +194,7 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  remove(&zombie_list, p->pid);
   add(&unused_list, p);
 }
 
@@ -267,14 +276,13 @@ userinit(void)
 
   p->state = RUNNABLE;
 
-  p->cpu_id = 0;
+  p->cpu_id = cpuid();
 
-  printf("userinit1\n");
-  c = mycpu();
-  printf("userinit2\n");
-  c->head = 0;
+  //printf("userinit1\n");
+  c = &cpus[p->cpu_id];
+  //printf("userinit2\n");
   add(c->head, p);
-  printf("userinit3\n");
+  //printf("userinit3\n");
 
   release(&p->lock);
 }
@@ -304,10 +312,11 @@ growproc(int n)
 int
 fork(void)
 {
+  printf("fork- here\n");
   int i, pid;
   struct proc *np;
   struct proc *p = myproc();
-  struct cpu *c = mycpu();
+  struct cpu *c;
 
   // Allocate process.
   if((np = allocproc()) == 0){
@@ -343,8 +352,9 @@ fork(void)
   acquire(&wait_lock);
   np->parent = p;
   np->cpu_id = p->cpu_id;
+  c = &cpus[p->cpu_id];
   add(c->head, p);
-  printf("fork");
+  printf("fork\n");
   release(&wait_lock);
 
   acquire(&np->lock);
@@ -375,6 +385,7 @@ reparent(struct proc *p)
 void
 exit(int status)
 {
+  printf("exit\n");
   struct proc *p = myproc();
 
   if(p == initproc)
@@ -482,12 +493,14 @@ scheduler(void)
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
 
-    printf("scheduler1\n");
+    //printf("scheduler1\n");
+    // printf("%d\n", cpuid());
+    // printf("%d\n", c->head);
     p = remove(c->head, -1);
-    printf("scheduler2\n");
+    //printf("scheduler2\n");
 
     if(p != 0){
-      acquire(&p->lock);
+      // acquire(&p->lock);
       if(p->state == RUNNABLE) {
         // Switch to chosen process.  It is the process's job
         // to release its lock and then reacquire it
@@ -536,8 +549,9 @@ sched(void)
 void
 yield(void)
 {
+  // printf("yield\n");
   struct proc *p = myproc();
-  struct cpu *c = mycpu();
+  struct cpu *c = &cpus[p->cpu_id];
   acquire(&p->lock);
   p->state = RUNNABLE;
   add(c->head, p);
@@ -571,6 +585,7 @@ forkret(void)
 void
 sleep(void *chan, struct spinlock *lk)
 {
+  printf("sleep\n");
   struct proc *p = myproc();
   
   // Must acquire p->lock in order to
@@ -603,6 +618,7 @@ sleep(void *chan, struct spinlock *lk)
 void
 wakeup(void *chan)
 {
+  printf("wakeup\n");
   struct proc *p;
   struct cpu *c;
 
@@ -611,8 +627,9 @@ wakeup(void *chan)
       acquire(&p->lock);
       if(p->state == SLEEPING && p->chan == chan) {
         p->state = RUNNABLE;
+        printf("here! - wakeup");
         remove(&sleeping_list, p->pid);
-        c = mycpu();
+        c = &cpus[p->cpu_id];
         add(c->head, p);
       }
       release(&p->lock);
@@ -690,7 +707,7 @@ procdump(void)
   struct proc *p;
   char *state;
 
-  printf("\n");
+   printf("\n");
   for(p = proc; p < &proc[NPROC]; p++){
     if(p->state == UNUSED)
       continue;
@@ -698,8 +715,8 @@ procdump(void)
       state = states[p->state];
     else
       state = "???";
-    printf("%d %s %s", p->pid, state, p->name);
-    printf("\n");
+       printf("%d %s %s", p->pid, state, p->name);
+       printf("\n");
   }
 }
 
@@ -714,25 +731,20 @@ int get_cpu(){
 
 //lock of returned object is acquired!
 struct proc* remove(struct proc *head, int pid){
-  struct proc *prev = head->next;
-  struct proc *curr;
+  struct proc *prev = head;
   
-  printf("in remove\n");
-
-  if(prev == 0) {
-    printf("no process in list\n");
+  // printf("in remove\n");
+  if(prev == 0){
+    // printf("no processes\n");
     return 0;
   }
 
-  if(pid == -1) {
-    printf("remove head\n");
-    pid = head->next->pid;
-  }
-
+  struct proc *curr = head->next;
   acquire(&prev->lock);
-  if(prev->pid == pid) {
-    curr = prev->next;
-    return prev;
+  if(curr != 0 && pid == -1) {
+    acquire(&curr->lock);
+    head->next = curr->next;
+    return curr;
   }
 
   while(prev != 0 && &prev->next != 0) {
@@ -754,25 +766,23 @@ int add(struct proc *head, struct proc *p){
   struct proc *prev = head;
   struct proc *curr = head;
 
-  printf("here!\n");
-  if(head == 0) {
-    head = p;
-    return 1;
-  }
-  
-  if(prev != 0 && prev->next == 0) {
-    printf("here!- only dummy head\n");
-    prev->next = p;
-    return 1;
-  }
+  printf("add!\n");
   
   acquire(&prev->lock);
+  if(head->next == 0) {
+    // printf("here!- only dummy head\n");
+    head->next = p;
+    release(&prev->lock);
+    return 1;
+  }
+  
+  
   while(prev != 0 && prev->next != 0){
-    printf("at least one proc in list\n");
+    // printf("at least one proc in list\n");
     curr = curr->next;
     acquire(&curr->lock);
     if(curr->next == 0){
-      printf("add- im here\n");
+      // printf("add\n");
       curr->next = p;
       release(&curr->lock);
       release(&prev->lock);
