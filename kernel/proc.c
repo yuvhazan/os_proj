@@ -6,6 +6,32 @@
 #include "proc.h"
 #include "defs.h"
 
+struct proc *zombie_head = 0;
+struct proc *sleeping_head = 0;
+struct proc *unused_head = 0;
+
+struct spinlock ready_lock[CPU_NUM];
+struct spinlock zombie_list_lock;
+struct spinlock sleeping_list_lock;
+struct spinlock unused_list_lock;
+
+struct spinlock * get_lock (struct proc *lst,int cpu_id){
+  struct spinlock * lock;
+  if(lst==zombie_head){
+    lock=&zombie_list_lock;
+  }
+  else if(lst==sleeping_head){
+    lock=&zombie_list_lock;
+  }
+  else if(lst==unused_head){
+    lock=&unused_list_lock;
+  }
+  else{
+  lock=&zombie_list_lock;
+  }
+  return lock;
+}
+
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
@@ -43,17 +69,77 @@ proc_mapstacks(pagetable_t kpgtbl) {
   }
 }
 
+struct proc** 
+get_pointer_to_list(struct proc* lst,int cpu_id){
+  struct proc** ptr = 0;
+  if(lst==zombie_head){
+    ptr = &zombie_head;
+  }
+  else if(lst==sleeping_head){
+    ptr = &sleeping_head;
+  }
+  else if(lst==unused_head){
+    ptr = &unused_head;
+  }
+  else {
+    ptr = &cpus[cpu_id].ready_head; 
+  }
+  return ptr;
+}
+
+void 
+add_process(struct proc* head, struct proc* process_to_add, int cpu_id)
+{
+  struct spinlock* lock_of_lst = get_lock(head,cpu_id);
+  acquire(lock_of_lst);
+  // empty list case
+  if(head==0){
+      struct proc** ptr_to_lst  = get_pointer_to_list(head, cpu_id);
+      // set head
+      *ptr_to_lst = process_to_add;
+      release(lock_of_lst);
+  }
+  else{
+    struct proc* prev = 0;
+    while(head!=0){
+      acquire(&head->list_lock);
+
+      if(prev){
+        release(&prev->list_lock);
+      }
+      else{
+        release(lock_of_lst);
+      }
+      prev = head;
+      head = head->next;
+    }
+    prev->next = process_to_add;
+    release(&prev->list_lock);
+  }
+}
+
 // initialize the proc table at boot time.
 void
 procinit(void)
 {
   struct proc *p;
-  
   initlock(&pid_lock, "nextpid");
+  initlock(&zombie_list_lock, "zombie_list_lock");
+  initlock(&unused_list_lock, "unused_list_lock");
+
+  for(struct spinlock* lock = ready_lock; lock <&ready_lock[CPU_NUM]; lock++){
+    initlock(lock, "ready lock");
+  }
+
   initlock(&wait_lock, "wait_lock");
+  initlock(&wait_lock, "wait_lock");
+
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
+      initlock(&p->list_lock, "list lock");
+      p->cpu_id = -1;
       p->kstack = KSTACK((int) (p - proc));
+      add_process(unused_head,p, -1);
   }
 }
 
@@ -668,4 +754,28 @@ int set_cpu(int cpu_num){
 int get_cpu(){
   return myproc()->cpu_id;
 }
+
+void 
+set_head_for_list(struct proc* lst,struct proc* p,int cpu_id){
+  if(lst==zombie_head){
+    zombie_head = p;
+    return;
+  }
+  if(lst==sleeping_head){
+    sleeping_head = p;
+    return;
+  }
+  if(lst==unused_head){
+    unused_head = p;
+    return ;
+  }
+
+  // else ready_list
+  cpus[cpu_id].ready_head = p;
+}
+
+
+
+
+
 
