@@ -6,6 +6,8 @@
 #include "proc.h"
 #include "defs.h"
 
+int init = 0;
+
 struct proc *zombie_head = 0;
 struct proc *sleeping_head = 0;
 struct proc *unused_head = 0;
@@ -15,19 +17,24 @@ struct spinlock zombie_list_lock;
 struct spinlock sleeping_list_lock;
 struct spinlock unused_list_lock;
 
-struct spinlock * get_lock (struct proc *lst,int cpu_id){
-  struct spinlock * lock;
-  if(lst==zombie_head){
-    lock=&zombie_list_lock;
+struct spinlock *get_lock(int type, int cpu_id)
+{
+  struct spinlock *lock;
+  if (type == ZL)
+  {
+    lock = &zombie_list_lock;
   }
-  else if(lst==sleeping_head){
-    lock=&zombie_list_lock;
+  else if (type == SL)
+  {
+    lock = &sleeping_list_lock;
   }
-  else if(lst==unused_head){
-    lock=&unused_list_lock;
+  else if (type == UL)
+  {
+    lock = &unused_list_lock;
   }
-  else{
-  lock=&zombie_list_lock;
+  else
+  {
+    lock = &ready_lock[cpu_id];
   }
   return lock;
 }
@@ -42,7 +49,7 @@ int nextpid = 1;
 struct spinlock pid_lock;
 
 extern void forkret(void);
-extern uint64 cas (volatile void * addr, int expected ,int newval);
+extern uint64 cas(volatile void *addr, int expected, int newval);
 static void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
@@ -56,58 +63,94 @@ struct spinlock wait_lock;
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
 // guard page.
-void
-proc_mapstacks(pagetable_t kpgtbl) {
+void proc_mapstacks(pagetable_t kpgtbl)
+{
   struct proc *p;
-  
-  for(p = proc; p < &proc[NPROC]; p++) {
+
+  for (p = proc; p < &proc[NPROC]; p++)
+  {
     char *pa = kalloc();
-    if(pa == 0)
+    if (pa == 0)
       panic("kalloc");
-    uint64 va = KSTACK((int) (p - proc));
+    uint64 va = KSTACK((int)(p - proc));
     kvmmap(kpgtbl, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
   }
 }
 
-struct proc** 
-get_pointer_to_list(struct proc* lst,int cpu_id){
-  struct proc** ptr = 0;
-  if(lst==zombie_head){
-    ptr = &zombie_head;
+struct proc* get_head_for_list(int type, int cpu_id){
+  struct proc* p;
+
+  switch (type)
+  {
+  case RL:
+    p = cpus[cpu_id].ready_head;
+    break;
+  case ZL:
+    p = zombie_head;
+    break;
+  case SL:
+    p = sleeping_head;
+    break;
+  case UL:
+    p = unused_head;
+    break;
+  
+  default:
+    panic("wrong type list");
   }
-  else if(lst==sleeping_head){
-    ptr = &sleeping_head;
-  }
-  else if(lst==unused_head){
-    ptr = &unused_head;
-  }
-  else {
-    ptr = &cpus[cpu_id].ready_head; 
-  }
-  return ptr;
+  return p;
 }
 
-void 
-add_process(struct proc* head, struct proc* process_to_add, int cpu_id)
+
+void set_head_for_list(int type, struct proc *p, int cpu_id)
 {
-  struct spinlock* lock_of_lst = get_lock(head,cpu_id);
-  acquire(lock_of_lst);
-  // empty list case
-  if(head==0){
-      struct proc** ptr_to_lst  = get_pointer_to_list(head, cpu_id);
-      // set head
-      *ptr_to_lst = process_to_add;
-      release(lock_of_lst);
+  if (type == ZL)
+  {
+    zombie_head = p;
+    return;
   }
-  else{
-    struct proc* prev = 0;
-    while(head!=0){
+  if (type == SL)
+  {
+    sleeping_head = p;
+    return;
+  }
+  if (type == UL)
+  {
+    unused_head = p;
+    return;
+  }
+
+  // else ready_list
+  cpus[cpu_id].ready_head = p;
+}
+
+void add_process(int type, struct proc *process_to_add, int cpu_id)
+{
+  if(!process_to_add){
+    panic("why");
+  }
+  struct spinlock *lock_of_lst = get_lock(type, cpu_id);
+  acquire(lock_of_lst);
+  struct proc *head = get_head_for_list(type,cpu_id);
+  // empty list case
+  if (head == 0)
+  {
+    set_head_for_list(type,process_to_add,cpu_id);
+    release(lock_of_lst);
+  }
+  else
+  {
+    struct proc *prev = 0;
+    while (head)
+    {
       acquire(&head->list_lock);
 
-      if(prev){
+      if (prev)
+      {
         release(&prev->list_lock);
       }
-      else{
+      else
+      {
         release(lock_of_lst);
       }
       prev = head;
@@ -118,36 +161,90 @@ add_process(struct proc* head, struct proc* process_to_add, int cpu_id)
   }
 }
 
+int remove_process(int type, struct proc *p)
+{
+  struct spinlock *lock = get_lock(type, p->cpu_id);
+  acquire(lock);
+  struct proc *head = get_head_for_list(type, p->cpu_id);
+  if (!head)
+  {
+    release(lock);
+    return 0;
+  }
+  else
+  {
+    struct proc *prev = 0;
+    if (p == head)
+    {
+      // remove node, p is the first link
+      acquire(&p->list_lock);
+      set_head_for_list(type, p->next, p->cpu_id);
+      p->next = 0;
+      release(&p->list_lock);
+      release(lock);
+    }
+    else
+    {
+      while (head)
+      {
+        acquire(&head->list_lock);
+
+        if (p == head)
+        {
+          // remove node, head is the first link
+          prev->next = head->next;
+          p->next = 0;
+          release(&head->list_lock);
+          release(&prev->list_lock);
+          return 1;
+        }
+
+        if (!prev)
+          release(lock);
+        else
+        {
+          release(&prev->list_lock);
+        }
+
+        prev = head;
+        head = head->next;
+      }
+    }
+    return 0;
+  }
+}
+
 // initialize the proc table at boot time.
-void
-procinit(void)
+void procinit(void)
 {
   struct proc *p;
   initlock(&pid_lock, "nextpid");
   initlock(&zombie_list_lock, "zombie_list_lock");
   initlock(&unused_list_lock, "unused_list_lock");
+  initlock(&sleeping_list_lock, "sleeping_list_lock");
 
-  for(struct spinlock* lock = ready_lock; lock <&ready_lock[CPU_NUM]; lock++){
+  for (struct spinlock *lock = ready_lock; lock < &ready_lock[CPU_NUM]; lock++)
+  {
     initlock(lock, "ready lock");
   }
 
   initlock(&wait_lock, "wait_lock");
   initlock(&wait_lock, "wait_lock");
 
-  for(p = proc; p < &proc[NPROC]; p++) {
-      initlock(&p->lock, "proc");
-      initlock(&p->list_lock, "list lock");
-      p->cpu_id = -1;
-      p->kstack = KSTACK((int) (p - proc));
-      add_process(unused_head,p, -1);
+  for (p = proc; p < &proc[NPROC]; p++)
+  {
+    initlock(&p->lock, "proc");
+    initlock(&p->list_lock, "list lock");
+    p->cpu_id = INVALID_CPU_ID;
+    p->kstack = KSTACK((int)(p - proc));
+    add_process(UL, p, INVALID_CPU_ID);
   }
 }
 
 // Must be called with interrupts disabled,
 // to prevent race with process being moved
 // to a different CPU.
-int
-cpuid()
+int cpuid()
 {
   int id = r_tp();
   return id;
@@ -155,16 +252,18 @@ cpuid()
 
 // Return this CPU's cpu struct.
 // Interrupts must be disabled.
-struct cpu*
-mycpu(void) {
+struct cpu *
+mycpu(void)
+{
   int id = cpuid();
   struct cpu *c = &cpus[id];
   return c;
 }
 
 // Return the current struct proc *, or zero if none.
-struct proc*
-myproc(void) {
+struct proc *
+myproc(void)
+{
   push_off();
   struct cpu *c = mycpu();
   struct proc *p = c->proc;
@@ -172,44 +271,85 @@ myproc(void) {
   return p;
 }
 
-int
-allocpid() {
+int allocpid()
+{
   int pid;
-  int pid_copy;
-  do{
-    pid_copy = pid;
+  do
+  {
     pid = nextpid;
-  } while(!cas(&pid,pid_copy,nextpid+1));
-   
-  nextpid = nextpid + 1;
+  } while (cas(&nextpid, pid, pid + 1));
   return pid;
+}
+
+// +struct proc* 
+// +remove_first(int type, int cpu_id)
+// +{
+// +  struct proc* head = get_head(type, cpu_id);
+// +  if(!head){
+// +    release_list(type, cpu_id);
+// +  }
+// +  else{
+// +    acquire(&head->list_lock);
+// +
+// +    set_head(head->next, type, cpu_id);
+// +    head->next = 0;
+// +    release(&head->list_lock);
+// +
+// +    release_list(type, cpu_id);
+// +
+// +  }
+// +  return head;
+// +}
+
+
+struct proc *
+remove_first(int type, int cpu_id)
+{
+  struct spinlock *lock = get_lock(type, cpu_id);
+  acquire(lock);
+  struct proc *head = get_head_for_list(type, cpu_id);
+  if (!head)
+  {
+    release(lock);
+  }
+  else
+  {
+    acquire(&head->list_lock);
+    set_head_for_list(type, head->next, cpu_id);
+
+    head->next = 0;
+    release(&head->list_lock);
+
+    release(lock);
+  }
+  return head;
 }
 
 // Look in the process table for an UNUSED proc.
 // If found, initialize state required to run in the kernel,
 // and return with p->lock held.
 // If there are no free procs, or a memory allocation fails, return 0.
-static struct proc*
+static struct proc *
 allocproc(void)
 {
   struct proc *p;
-
-  for(p = proc; p < &proc[NPROC]; p++) {
-    acquire(&p->lock);
-    if(p->state == UNUSED) {
-      goto found;
-    } else {
-      release(&p->lock);
-    }
+  p = remove_first(UL, INVALID_CPU_ID);
+  if (!p)
+  {
+    return 0;
   }
+  acquire(&p->lock);
+  goto found;
   return 0;
 
 found:
   p->pid = allocpid();
   p->state = USED;
+  p->next = 0;
 
   // Allocate a trapframe page.
-  if((p->trapframe = (struct trapframe *)kalloc()) == 0){
+  if ((p->trapframe = (struct trapframe *)kalloc()) == 0)
+  {
     freeproc(p);
     release(&p->lock);
     return 0;
@@ -217,7 +357,8 @@ found:
 
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
-  if(p->pagetable == 0){
+  if (p->pagetable == 0)
+  {
     freeproc(p);
     release(&p->lock);
     return 0;
@@ -238,10 +379,10 @@ found:
 static void
 freeproc(struct proc *p)
 {
-  if(p->trapframe)
-    kfree((void*)p->trapframe);
+  if (p->trapframe)
+    kfree((void *)p->trapframe);
   p->trapframe = 0;
-  if(p->pagetable)
+  if (p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
   p->sz = 0;
@@ -252,6 +393,8 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  remove_process(ZL, p);
+  add_process(UL, p, INVALID_CPU_ID);
 }
 
 // Create a user page table for a given process,
@@ -263,22 +406,24 @@ proc_pagetable(struct proc *p)
 
   // An empty page table.
   pagetable = uvmcreate();
-  if(pagetable == 0)
+  if (pagetable == 0)
     return 0;
 
   // map the trampoline code (for system call return)
   // at the highest user virtual address.
   // only the supervisor uses it, on the way
   // to/from user space, so not PTE_U.
-  if(mappages(pagetable, TRAMPOLINE, PGSIZE,
-              (uint64)trampoline, PTE_R | PTE_X) < 0){
+  if (mappages(pagetable, TRAMPOLINE, PGSIZE,
+               (uint64)trampoline, PTE_R | PTE_X) < 0)
+  {
     uvmfree(pagetable, 0);
     return 0;
   }
 
   // map the trapframe just below TRAMPOLINE, for trampoline.S.
-  if(mappages(pagetable, TRAPFRAME, PGSIZE,
-              (uint64)(p->trapframe), PTE_R | PTE_W) < 0){
+  if (mappages(pagetable, TRAPFRAME, PGSIZE,
+               (uint64)(p->trapframe), PTE_R | PTE_W) < 0)
+  {
     uvmunmap(pagetable, TRAMPOLINE, 1, 0);
     uvmfree(pagetable, 0);
     return 0;
@@ -289,8 +434,7 @@ proc_pagetable(struct proc *p)
 
 // Free a process's page table, and free the
 // physical memory it refers to.
-void
-proc_freepagetable(pagetable_t pagetable, uint64 sz)
+void proc_freepagetable(pagetable_t pagetable, uint64 sz)
 {
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
@@ -300,32 +444,61 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
 // a user program that calls exec("/init")
 // od -t xC initcode
 uchar initcode[] = {
-  0x17, 0x05, 0x00, 0x00, 0x13, 0x05, 0x45, 0x02,
-  0x97, 0x05, 0x00, 0x00, 0x93, 0x85, 0x35, 0x02,
-  0x93, 0x08, 0x70, 0x00, 0x73, 0x00, 0x00, 0x00,
-  0x93, 0x08, 0x20, 0x00, 0x73, 0x00, 0x00, 0x00,
-  0xef, 0xf0, 0x9f, 0xff, 0x2f, 0x69, 0x6e, 0x69,
-  0x74, 0x00, 0x00, 0x24, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x00, 0x00, 0x00
-};
+    0x17, 0x05, 0x00, 0x00, 0x13, 0x05, 0x45, 0x02,
+    0x97, 0x05, 0x00, 0x00, 0x93, 0x85, 0x35, 0x02,
+    0x93, 0x08, 0x70, 0x00, 0x73, 0x00, 0x00, 0x00,
+    0x93, 0x08, 0x20, 0x00, 0x73, 0x00, 0x00, 0x00,
+    0xef, 0xf0, 0x9f, 0xff, 0x2f, 0x69, 0x6e, 0x69,
+    0x74, 0x00, 0x00, 0x24, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00};
+
+void increase_queue_size(int cpu_id)
+{
+  struct cpu *c = &cpus[cpu_id];
+  uint64 old_queue_size;
+  do
+  {
+    old_queue_size = c->ready_queue_size;
+  } while (cas(&c->ready_queue_size, old_queue_size, old_queue_size + 1));
+}
+
+void decrease_queue_size(int cpu_id)
+{
+  struct cpu *c = &cpus[cpu_id];
+  uint64 old_queue_size;
+  do
+  {
+    old_queue_size = c->ready_queue_size;
+  } while (cas(&c->ready_queue_size, old_queue_size, old_queue_size - 1));
+}
 
 // Set up first user process.
-void
-userinit(void)
+void userinit(void)
 {
+  if (!init)
+  {
+    struct cpu *c;
+    for (c = cpus; c < &cpus[CPU_NUM]; c++)
+    {
+      c->ready_head = 0;
+      c->ready_queue_size = 0;
+    }
+    init = 1;
+  }
+
   struct proc *p;
 
   p = allocproc();
   initproc = p;
-  
+
   // allocate one user page and copy init's instructions
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
 
   // prepare for the very first "return" from kernel to user.
-  p->trapframe->epc = 0;      // user program counter
-  p->trapframe->sp = PGSIZE;  // user stack pointer
+  p->trapframe->epc = 0;     // user program counter
+  p->trapframe->sp = PGSIZE; // user stack pointer
 
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
@@ -333,46 +506,66 @@ userinit(void)
   p->state = RUNNABLE;
 
   p->cpu_id = 0;
+  increase_queue_size(p->cpu_id);
+  cpus[p->cpu_id].ready_head = p;
 
+  p->cpu_id = 0;
   release(&p->lock);
 }
 
 // Grow or shrink user memory by n bytes.
 // Return 0 on success, -1 on failure.
-int
-growproc(int n)
+int growproc(int n)
 {
   uint sz;
   struct proc *p = myproc();
 
   sz = p->sz;
-  if(n > 0){
-    if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
+  if (n > 0)
+  {
+    if ((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0)
+    {
       return -1;
     }
-  } else if(n < 0){
+  }
+  else if (n < 0)
+  {
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
   p->sz = sz;
   return 0;
 }
 
+int get_min_cpu()
+{
+  int min = 0;
+  for (int i = 1; i < CPU_NUM; i++)
+  {
+    if (cpus[i].ready_queue_size < cpus[min].ready_queue_size)
+    {
+      min = i;
+    }
+  }
+  return min;
+}
+
 // Create a new process, copying the parent.
 // Sets up child kernel stack to return as if from fork() system call.
-int
-fork(void)
+int fork(void)
 {
   int i, pid;
   struct proc *np;
   struct proc *p = myproc();
 
   // Allocate process.
-  if((np = allocproc()) == 0){
+  if ((np = allocproc()) == 0)
+  {
     return -1;
   }
 
   // Copy user memory from parent to child.
-  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
+  if (uvmcopy(p->pagetable, np->pagetable, p->sz) < 0)
+  {
     freeproc(np);
     release(&np->lock);
     return -1;
@@ -386,8 +579,8 @@ fork(void)
   np->trapframe->a0 = 0;
 
   // increment reference counts on open file descriptors.
-  for(i = 0; i < NOFILE; i++)
-    if(p->ofile[i])
+  for (i = 0; i < NOFILE; i++)
+    if (p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
 
@@ -399,11 +592,14 @@ fork(void)
 
   acquire(&wait_lock);
   np->parent = p;
-  np->cpu_id = p->cpu_id;
   release(&wait_lock);
 
   acquire(&np->lock);
   np->state = RUNNABLE;
+  int cpu_id = (BLNCFLG) ? get_min_cpu() : p->cpu_id;
+  np->cpu_id = cpu_id;
+  increase_queue_size(cpu_id);
+  add_process(RL,np, cpu_id);
   release(&np->lock);
 
   return pid;
@@ -411,13 +607,14 @@ fork(void)
 
 // Pass p's abandoned children to init.
 // Caller must hold wait_lock.
-void
-reparent(struct proc *p)
+void reparent(struct proc *p)
 {
   struct proc *pp;
 
-  for(pp = proc; pp < &proc[NPROC]; pp++){
-    if(pp->parent == p){
+  for (pp = proc; pp < &proc[NPROC]; pp++)
+  {
+    if (pp->parent == p)
+    {
       pp->parent = initproc;
       wakeup(initproc);
     }
@@ -427,17 +624,18 @@ reparent(struct proc *p)
 // Exit the current process.  Does not return.
 // An exited process remains in the zombie state
 // until its parent calls wait().
-void
-exit(int status)
+void exit(int status)
 {
   struct proc *p = myproc();
 
-  if(p == initproc)
+  if (p == initproc)
     panic("init exiting");
 
   // Close all open files.
-  for(int fd = 0; fd < NOFILE; fd++){
-    if(p->ofile[fd]){
+  for (int fd = 0; fd < NOFILE; fd++)
+  {
+    if (p->ofile[fd])
+    {
       struct file *f = p->ofile[fd];
       fileclose(f);
       p->ofile[fd] = 0;
@@ -456,11 +654,14 @@ exit(int status)
 
   // Parent might be sleeping in wait().
   wakeup(p->parent);
-  
+
   acquire(&p->lock);
 
   p->xstate = status;
   p->state = ZOMBIE;
+
+  decrease_queue_size(p->cpu_id);
+  add_process(ZL, p, INVALID_CPU_ID);
 
   release(&wait_lock);
 
@@ -471,8 +672,7 @@ exit(int status)
 
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
-int
-wait(uint64 addr)
+int wait(uint64 addr)
 {
   struct proc *np;
   int havekids, pid;
@@ -480,20 +680,25 @@ wait(uint64 addr)
 
   acquire(&wait_lock);
 
-  for(;;){
+  for (;;)
+  {
     // Scan through table looking for exited children.
     havekids = 0;
-    for(np = proc; np < &proc[NPROC]; np++){
-      if(np->parent == p){
+    for (np = proc; np < &proc[NPROC]; np++)
+    {
+      if (np->parent == p)
+      {
         // make sure the child isn't still in exit() or swtch().
         acquire(&np->lock);
 
         havekids = 1;
-        if(np->state == ZOMBIE){
+        if (np->state == ZOMBIE)
+        {
           // Found one.
           pid = np->pid;
-          if(addr != 0 && copyout(p->pagetable, addr, (char *)&np->xstate,
-                                  sizeof(np->xstate)) < 0) {
+          if (addr != 0 && copyout(p->pagetable, addr, (char *)&np->xstate,
+                                   sizeof(np->xstate)) < 0)
+          {
             release(&np->lock);
             release(&wait_lock);
             return -1;
@@ -508,14 +713,30 @@ wait(uint64 addr)
     }
 
     // No point waiting if we don't have any children.
-    if(!havekids || p->killed){
+    if (!havekids || p->killed)
+    {
       release(&wait_lock);
       return -1;
     }
-    
+
     // Wait for a child to exit.
-    sleep(p, &wait_lock);  //DOC: wait-sleep
+    sleep(p, &wait_lock); // DOC: wait-sleep
   }
+}
+
+struct proc *
+steal_process()
+{
+  struct proc *p = 0;
+  for (int i = 0; i < CPU_NUM; i++)
+  {
+    if (cpus[i].ready_queue_size > 1)
+    {
+      p = remove_first(RL, i);
+      break;
+    }
+  }
+  return p;
 }
 
 // Per-CPU process scheduler.
@@ -525,33 +746,43 @@ wait(uint64 addr)
 //  - swtch to start running that process.
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
-void
-scheduler(void)
+void scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
-  
+  int cpu_id = cpuid();
+
   c->proc = 0;
-  for(;;){
+  for (;;)
+  {
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
-
-    for(p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
-      if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
+    p = remove_first(RL, cpu_id);
+    // if empty list
+    if (!p)
+    {
+      if (!BLNCFLG)
+      {
+        continue;
       }
-      release(&p->lock);
+      p = steal_process();
+      if (!p)
+      {
+        continue;
+      }
+      decrease_queue_size(p->cpu_id);
+      p->cpu_id = cpu_id;
+      increase_queue_size(cpu_id);
     }
+    acquire(&p->lock);
+
+    p->state = RUNNING;
+    c->proc = p;
+
+    swtch(&c->context, &p->context);
+
+    c->proc = 0;
+    release(&p->lock);
   }
 }
 
@@ -562,19 +793,18 @@ scheduler(void)
 // be proc->intena and proc->noff, but that would
 // break in the few places where a lock is held but
 // there's no process.
-void
-sched(void)
+void sched(void)
 {
   int intena;
   struct proc *p = myproc();
 
-  if(!holding(&p->lock))
+  if (!holding(&p->lock))
     panic("sched p->lock");
-  if(mycpu()->noff != 1)
+  if (mycpu()->noff != 1)
     panic("sched locks");
-  if(p->state == RUNNING)
+  if (p->state == RUNNING)
     panic("sched running");
-  if(intr_get())
+  if (intr_get())
     panic("sched interruptible");
 
   intena = mycpu()->intena;
@@ -583,27 +813,27 @@ sched(void)
 }
 
 // Give up the CPU for one scheduling round.
-void
-yield(void)
+void yield(void)
 {
   struct proc *p = myproc();
   acquire(&p->lock);
   p->state = RUNNABLE;
+  add_process(RL, p, p->cpu_id);
   sched();
   release(&p->lock);
 }
 
 // A fork child's very first scheduling by scheduler()
 // will swtch to forkret.
-void
-forkret(void)
+void forkret(void)
 {
   static int first = 1;
 
   // Still holding p->lock from scheduler.
   release(&myproc()->lock);
 
-  if (first) {
+  if (first)
+  {
     // File system initialization must be run in the context of a
     // regular process (e.g., because it calls sleep), and thus cannot
     // be run from main().
@@ -616,11 +846,10 @@ forkret(void)
 
 // Atomically release lock and sleep on chan.
 // Reacquires lock when awakened.
-void
-sleep(void *chan, struct spinlock *lk)
+void sleep(void *chan, struct spinlock *lk)
 {
   struct proc *p = myproc();
-  
+
   // Must acquire p->lock in order to
   // change p->state and then call sched.
   // Once we hold p->lock, we can be
@@ -628,12 +857,14 @@ sleep(void *chan, struct spinlock *lk)
   // (wakeup locks p->lock),
   // so it's okay to release lk.
 
-  acquire(&p->lock);  //DOC: sleeplock1
+  acquire(&p->lock); // DOC: sleeplock1
   release(lk);
 
   // Go to sleep.
   p->chan = chan;
   p->state = SLEEPING;
+  decrease_queue_size(p->cpu_id);
+  add_process(SL,  p, INVALID_CPU_ID);
 
   sched();
 
@@ -647,37 +878,124 @@ sleep(void *chan, struct spinlock *lk)
 
 // Wake up all processes sleeping on chan.
 // Must be called without any p->lock.
-void
-wakeup(void *chan)
+void wakeup(void *chan)
 {
+  int released_list = 0;
   struct proc *p;
+  struct proc *prev = 0;
+  struct proc *tmp;
+  struct spinlock *lock_of_sleeping = get_lock(SL, INVALID_CPU_ID);
+  acquire(lock_of_sleeping);
+  p = get_head_for_list(SL, INVALID_CPU_ID);
+  while (p)
+  {
+    acquire(&p->lock);
+    acquire(&p->list_lock);
+    if (p->chan == chan)
+    {
+      if (p == sleeping_head)
+      {
+        // remove fom sleep
+        set_head_for_list(SL, p->next, INVALID_CPU_ID);
 
-  for(p = proc; p < &proc[NPROC]; p++) {
-    if(p != myproc()){
-      acquire(&p->lock);
-      if(p->state == SLEEPING && p->chan == chan) {
-        p->state = RUNNABLE;
+        tmp = p;
+        p = p->next;
+        tmp->next = 0;
+        // add to runnable
+        tmp->state = RUNNABLE;
+        int cpu_id;
+        if (BLNCFLG)
+        {
+          cpu_id = get_min_cpu();
+        }
+        else
+        {
+          cpu_id = 0;
+        }
+        tmp->cpu_id = cpu_id;
+        increase_queue_size(cpu_id);
+        add_process(RL, tmp, cpu_id);
+        release(&tmp->list_lock);
+        release(&tmp->lock);
       }
-      release(&p->lock);
+      // we are not on the beginning of the list.
+      else
+      {
+        prev->next = p->next;
+        p->next = 0;
+        p->state = RUNNABLE;
+        int cpu_id = (BLNCFLG) ? get_min_cpu() : p->cpu_id;
+        p->cpu_id = cpu_id;
+        increase_queue_size(cpu_id);
+        add_process(RL, p, cpu_id);
+        release(&p->list_lock);
+        release(&p->lock);
+        p = prev->next;
+      }
+    }
+    else
+    {
+      // we are not on the chan
+      if (p == get_head_for_list(SL,INVALID_CPU_ID))
+      {
+        release(lock_of_sleeping);
+        released_list = 1;
+      }
+      else
+      {
+        release(&prev->list_lock);
+      }
+      release(&(p->lock)); // because we dont need to change his fields
+      prev = p;
+      p = p->next;
     }
   }
+  if (!released_list)
+  {
+    release(lock_of_sleeping);
+  }
+  if (prev)
+  {
+    release(&prev->list_lock);
+  }
 }
+
+// void
+//  wakeup(void *chan)
+//  {
+//    struct proc *p;
+
+//   for(p = proc; p < &proc[NPROC]; p++) {
+//     if(p != myproc()){
+//       acquire(&p->lock);
+//       if(p->state == SLEEPING && p->chan == chan) {
+//         p->state = RUNNABLE;
+//       }
+//       release(&p->lock);
+//     }
+//   }
+//  }
 
 // Kill the process with the given pid.
 // The victim won't exit until it tries to return
 // to user space (see usertrap() in trap.c).
-int
-kill(int pid)
+int kill(int pid)
 {
   struct proc *p;
 
-  for(p = proc; p < &proc[NPROC]; p++){
+  for (p = proc; p < &proc[NPROC]; p++)
+  {
     acquire(&p->lock);
-    if(p->pid == pid){
+    if (p->pid == pid)
+    {
       p->killed = 1;
-      if(p->state == SLEEPING){
+      if (p->state == SLEEPING)
+      {
         // Wake process from sleep().
         p->state = RUNNABLE;
+        remove_process(SL, p);
+        add_process(RL, p, p->cpu_id);
+        increase_queue_size(p->cpu_id);
       }
       release(&p->lock);
       return 0;
@@ -690,13 +1008,15 @@ kill(int pid)
 // Copy to either a user address, or kernel address,
 // depending on usr_dst.
 // Returns 0 on success, -1 on error.
-int
-either_copyout(int user_dst, uint64 dst, void *src, uint64 len)
+int either_copyout(int user_dst, uint64 dst, void *src, uint64 len)
 {
   struct proc *p = myproc();
-  if(user_dst){
+  if (user_dst)
+  {
     return copyout(p->pagetable, dst, src, len);
-  } else {
+  }
+  else
+  {
     memmove((char *)dst, src, len);
     return 0;
   }
@@ -705,14 +1025,16 @@ either_copyout(int user_dst, uint64 dst, void *src, uint64 len)
 // Copy from either a user address, or kernel address,
 // depending on usr_src.
 // Returns 0 on success, -1 on error.
-int
-either_copyin(void *dst, int user_src, uint64 src, uint64 len)
+int either_copyin(void *dst, int user_src, uint64 src, uint64 len)
 {
   struct proc *p = myproc();
-  if(user_src){
+  if (user_src)
+  {
     return copyin(p->pagetable, dst, src, len);
-  } else {
-    memmove(dst, (char*)src, len);
+  }
+  else
+  {
+    memmove(dst, (char *)src, len);
     return 0;
   }
 }
@@ -720,24 +1042,23 @@ either_copyin(void *dst, int user_src, uint64 src, uint64 len)
 // Print a process listing to console.  For debugging.
 // Runs when user types ^P on console.
 // No lock to avoid wedging a stuck machine further.
-void
-procdump(void)
+void procdump(void)
 {
   static char *states[] = {
-  [UNUSED]    "unused",
-  [SLEEPING]  "sleep ",
-  [RUNNABLE]  "runble",
-  [RUNNING]   "run   ",
-  [ZOMBIE]    "zombie"
-  };
+      [UNUSED] "unused",
+      [SLEEPING] "sleep ",
+      [RUNNABLE] "runble",
+      [RUNNING] "run   ",
+      [ZOMBIE] "zombie"};
   struct proc *p;
   char *state;
 
   printf("\n");
-  for(p = proc; p < &proc[NPROC]; p++){
-    if(p->state == UNUSED)
+  for (p = proc; p < &proc[NPROC]; p++)
+  {
+    if (p->state == UNUSED)
       continue;
-    if(p->state >= 0 && p->state < NELEM(states) && states[p->state])
+    if (p->state >= 0 && p->state < NELEM(states) && states[p->state])
       state = states[p->state];
     else
       state = "???";
@@ -746,36 +1067,13 @@ procdump(void)
   }
 }
 
-int set_cpu(int cpu_num){
+int set_cpu(int cpu_num)
+{
   myproc()->cpu_id = cpu_num;
-  return cpu_num; 
+  return cpu_num;
 }
 
-int get_cpu(){
+int get_cpu()
+{
   return myproc()->cpu_id;
 }
-
-void 
-set_head_for_list(struct proc* lst,struct proc* p,int cpu_id){
-  if(lst==zombie_head){
-    zombie_head = p;
-    return;
-  }
-  if(lst==sleeping_head){
-    sleeping_head = p;
-    return;
-  }
-  if(lst==unused_head){
-    unused_head = p;
-    return ;
-  }
-
-  // else ready_list
-  cpus[cpu_id].ready_head = p;
-}
-
-
-
-
-
-

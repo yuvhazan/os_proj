@@ -1,3 +1,12 @@
+#define OFF 0
+#define ON 1
+
+#ifndef BLNCFLG
+#define BLNCFLG OFF
+#endif
+
+enum list_type {RL, ZL, SL, UL};
+
 // Saved registers for kernel context switches.
 struct context {
   uint64 ra;
@@ -25,6 +34,7 @@ struct cpu {
   int noff;                   // Depth of push_off() nesting.
   int intena;                 // Were interrupts enabled before push_off()?
   struct proc * ready_head;
+  uint64 ready_queue_size;
 };
 
 extern struct cpu cpus[NCPU];
