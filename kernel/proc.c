@@ -17,18 +17,18 @@ struct spinlock zombie_list_lock;
 struct spinlock sleeping_list_lock;
 struct spinlock unused_list_lock;
 
-struct spinlock *get_lock(int type, int cpu_id)
+struct spinlock *get_lock(struct proc ** head_ptr, int cpu_id)
 {
   struct spinlock *lock;
-  if (type == ZL)
+  if (head_ptr == &zombie_head)
   {
     lock = &zombie_list_lock;
   }
-  else if (type == SL)
+  else if (head_ptr == &sleeping_head)
   {
     lock = &sleeping_list_lock;
   }
-  else if (type == UL)
+  else if (head_ptr == &unused_head)
   {
     lock = &unused_list_lock;
   }
@@ -77,57 +77,19 @@ void proc_mapstacks(pagetable_t kpgtbl)
   }
 }
 
-struct proc *get_head_for_list(int type, int cpu_id)
+void set_head_for_list(struct proc **head_ptr,struct proc *p)
 {
-  struct proc *p;
-  if (type == ZL)
-  {
-    p = zombie_head;
-  }
-  else if (type == SL)
-  {
-    p = sleeping_head;
-  }
-  else if (type == UL)
-  {
-    p = unused_head;
-  } else{
-  // else ready_list
-  p = cpus[cpu_id].ready_head;
-  }
-  return p;
+  *head_ptr = p;
 }
 
-void set_head_for_list(int type, struct proc *p, int cpu_id)
+void add_process(struct proc **head_ptr, struct proc *process_to_add, struct spinlock *lock_of_lst)
 {
-  if (type == ZL)
-  {
-    zombie_head = p;
-    return;
-  }
-  if (type == SL)
-  {
-    sleeping_head = p;
-    return;
-  }
-  if (type == UL)
-  {
-    unused_head = p;
-    return;
-  }
-  // else ready_list
-  cpus[cpu_id].ready_head = p;
-}
-
-void add_process(int type, struct proc *process_to_add, int cpu_id)
-{
-  struct spinlock *lock_of_lst = get_lock(type, cpu_id);
   acquire(lock_of_lst);
-  struct proc *head = get_head_for_list(type, cpu_id);
+  struct proc *head = *head_ptr;
   // empty list case
   if (head == 0)
   {
-    set_head_for_list(type, process_to_add, cpu_id);
+    set_head_for_list(head_ptr, process_to_add);
     release(lock_of_lst);
   }
   else
@@ -153,11 +115,11 @@ void add_process(int type, struct proc *process_to_add, int cpu_id)
   }
 }
 
-int remove_process(int type, struct proc *p)
+int remove_process(struct proc **head_ptr, struct proc *p)
 {
-  struct spinlock *lock = get_lock(type, p->cpu_id);
+  struct spinlock *lock = get_lock(head_ptr, p->cpu_id);
   acquire(lock);
-  struct proc *head = get_head_for_list(type, p->cpu_id);
+  struct proc *head = *head_ptr;
   if (!head)
   {
     release(lock);
@@ -170,7 +132,7 @@ int remove_process(int type, struct proc *p)
     {
       // remove node, p is the first link
       acquire(&p->list_lock);
-      set_head_for_list(type, p->next, p->cpu_id);
+      set_head_for_list(head_ptr, p->next);
       p->next = 0;
       release(&p->list_lock);
       release(lock);
@@ -229,7 +191,7 @@ void procinit(void)
     initlock(&p->list_lock, "list lock");
     p->cpu_id = INVALID_CPU_ID;
     p->kstack = KSTACK((int)(p - proc));
-    add_process(UL, p, INVALID_CPU_ID);
+    add_process(&unused_head, p, get_lock(&unused_head,INVALID_CPU_ID));
   }
 }
 
@@ -273,32 +235,11 @@ int allocpid()
   return pid;
 }
 
-// +struct proc*
-// +remove_first(int type, int cpu_id)
-// +{
-// +  struct proc* head = get_head(type, cpu_id);
-// +  if(!head){
-// +    release_list(type, cpu_id);
-// +  }
-// +  else{
-// +    acquire(&head->list_lock);
-// +
-// +    set_head(head->next, type, cpu_id);
-// +    head->next = 0;
-// +    release(&head->list_lock);
-// +
-// +    release_list(type, cpu_id);
-// +
-// +  }
-// +  return head;
-// +}
-
 struct proc *
-remove_first(int type, int cpu_id)
+remove_first(struct proc **head_ptr, struct spinlock *lock)
 {
-  struct spinlock *lock = get_lock(type, cpu_id);
   acquire(lock);
-  struct proc *head = get_head_for_list(type, cpu_id);
+  struct proc *head = *head_ptr;
   if (!head)
   {
     release(lock);
@@ -306,7 +247,7 @@ remove_first(int type, int cpu_id)
   else
   {
     acquire(&head->list_lock);
-    set_head_for_list(type, head->next, cpu_id);
+    set_head_for_list(head_ptr, head->next);
 
     head->next = 0;
     release(&head->list_lock);
@@ -324,7 +265,7 @@ static struct proc *
 allocproc(void)
 {
   struct proc *p;
-  p = remove_first(UL, INVALID_CPU_ID);
+  p = remove_first(&unused_head, get_lock(&unused_head, INVALID_CPU_ID));
   if (!p)
   {
     return 0;
@@ -384,8 +325,8 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
-  remove_process(ZL, p);
-  add_process(UL, p, INVALID_CPU_ID);
+  remove_process(&zombie_head, p);
+  add_process(&unused_head, p, get_lock(&unused_head,INVALID_CPU_ID));
 }
 
 // Create a user page table for a given process,
@@ -608,7 +549,7 @@ int fork(void)
   np->cpu_id = cpu_id;
   increase_queue_size(cpu_id);
 
-  add_process(RL, np, cpu_id);
+  add_process(&cpus[cpu_id].ready_head, np,get_lock(&cpus[cpu_id].ready_head,cpu_id));
   release(&np->lock);
 
   return pid;
@@ -670,7 +611,7 @@ void exit(int status)
   p->state = ZOMBIE;
 
   decrease_queue_size(p->cpu_id);
-  add_process(ZL, p, INVALID_CPU_ID);
+  add_process(&zombie_head, p, get_lock(&zombie_head,INVALID_CPU_ID));
 
   release(&wait_lock);
 
@@ -741,7 +682,7 @@ steal_process()
   {
     if (cpus[i].ready_queue_size > 1)
     {
-      p = remove_first(RL, i);
+      p = remove_first(&cpus[i].ready_head, get_lock(&cpus[i].ready_head, i));
       break;
     }
   }
@@ -766,7 +707,7 @@ void scheduler(void)
   {
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
-    p = remove_first(RL, cpu_id);
+    p = remove_first(&cpus[cpu_id].ready_head, get_lock(&cpus[cpu_id].ready_head,cpu_id));
     if (p == 0)
     {
       if (BLNCFLG)
@@ -826,7 +767,7 @@ void yield(void)
   struct proc *p = myproc();
   acquire(&p->lock);
   p->state = RUNNABLE;
-  add_process(RL, p, p->cpu_id);
+  add_process(&cpus[p->cpu_id].ready_head, p, get_lock(&cpus[p->cpu_id].ready_head,p->cpu_id));
   sched();
   release(&p->lock);
 }
@@ -872,7 +813,7 @@ void sleep(void *chan, struct spinlock *lk)
   p->chan = chan;
   p->state = SLEEPING;
   decrease_queue_size(p->cpu_id);
-  add_process(SL, p, INVALID_CPU_ID);
+  add_process(&sleeping_head, p, get_lock(&sleeping_head,INVALID_CPU_ID));
 
   sched();
 
@@ -892,9 +833,9 @@ void wakeup(void *chan)
   struct proc *p;
   struct proc *prev = 0;
   struct proc *tmp;
-  struct spinlock *lock_of_sleeping = get_lock(SL, INVALID_CPU_ID);
+  struct spinlock *lock_of_sleeping = get_lock(&sleeping_head, INVALID_CPU_ID);
   acquire(lock_of_sleeping);
-  p = get_head_for_list(SL, INVALID_CPU_ID);
+  p = sleeping_head;
   while (p)
   {
     acquire(&p->lock);
@@ -904,7 +845,7 @@ void wakeup(void *chan)
       if (p == sleeping_head)
       {
         // remove fom sleep
-        set_head_for_list(SL, p->next, INVALID_CPU_ID);
+        set_head_for_list(&sleeping_head, p->next);
 
         tmp = p;
         p = p->next;
@@ -922,7 +863,7 @@ void wakeup(void *chan)
         }
         tmp->cpu_id = cpu_id;
         increase_queue_size(cpu_id);
-        add_process(RL, tmp, cpu_id);
+        add_process(&cpus[cpu_id].ready_head, tmp, get_lock(&cpus[cpu_id].ready_head,cpu_id));
         release(&tmp->list_lock);
         release(&tmp->lock);
       }
@@ -935,7 +876,7 @@ void wakeup(void *chan)
         int cpu_id = (BLNCFLG) ? get_min_cpu() : p->cpu_id;
         p->cpu_id = cpu_id;
         increase_queue_size(cpu_id);
-        add_process(RL, p, cpu_id);
+        add_process(&cpus[cpu_id].ready_head, p, get_lock(&cpus[cpu_id].ready_head,cpu_id));
         release(&p->list_lock);
         release(&p->lock);
         p = prev->next;
@@ -944,7 +885,7 @@ void wakeup(void *chan)
     else
     {
       // we are not on the chan
-      if (p == get_head_for_list(SL, INVALID_CPU_ID))
+      if (p == sleeping_head)
       {
         release(lock_of_sleeping);
         released_list = 1;
@@ -1001,8 +942,8 @@ int kill(int pid)
       {
         // Wake process from sleep().
         p->state = RUNNABLE;
-        remove_process(SL, p);
-        add_process(RL, p, p->cpu_id);
+        remove_process(&sleeping_head, p);
+        add_process(&cpus[p->cpu_id].ready_head, p, get_lock(&cpus[p->cpu_id].ready_head,p->cpu_id));
         increase_queue_size(p->cpu_id);
       }
       release(&p->lock);

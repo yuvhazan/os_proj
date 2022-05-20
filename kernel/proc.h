@@ -5,7 +5,6 @@
 #define BLNCFLG OFF
 #endif
 
-enum list_type {RL, ZL, SL, UL};
 enum boolean {FALSE=0,TRUE=1};
 
 // Saved registers for kernel context switches.
