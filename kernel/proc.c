@@ -6,7 +6,7 @@
 #include "proc.h"
 #include "defs.h"
 
-int init = 0;
+int initialized = FALSE;
 
 struct proc *zombie_head = 0;
 struct proc *sleeping_head = 0;
@@ -77,30 +77,26 @@ void proc_mapstacks(pagetable_t kpgtbl)
   }
 }
 
-struct proc* get_head_for_list(int type, int cpu_id){
-  struct proc* p;
-
-  switch (type)
+struct proc *get_head_for_list(int type, int cpu_id)
+{
+  struct proc *p;
+  if (type == ZL)
   {
-  case RL:
-    p = cpus[cpu_id].ready_head;
-    break;
-  case ZL:
     p = zombie_head;
-    break;
-  case SL:
+  }
+  else if (type == SL)
+  {
     p = sleeping_head;
-    break;
-  case UL:
+  }
+  else if (type == UL)
+  {
     p = unused_head;
-    break;
-  
-  default:
-    panic("wrong type list");
+  } else{
+  // else ready_list
+  p = cpus[cpu_id].ready_head;
   }
   return p;
 }
-
 
 void set_head_for_list(int type, struct proc *p, int cpu_id)
 {
@@ -119,23 +115,19 @@ void set_head_for_list(int type, struct proc *p, int cpu_id)
     unused_head = p;
     return;
   }
-
   // else ready_list
   cpus[cpu_id].ready_head = p;
 }
 
 void add_process(int type, struct proc *process_to_add, int cpu_id)
 {
-  if(!process_to_add){
-    panic("why");
-  }
   struct spinlock *lock_of_lst = get_lock(type, cpu_id);
   acquire(lock_of_lst);
-  struct proc *head = get_head_for_list(type,cpu_id);
+  struct proc *head = get_head_for_list(type, cpu_id);
   // empty list case
   if (head == 0)
   {
-    set_head_for_list(type,process_to_add,cpu_id);
+    set_head_for_list(type, process_to_add, cpu_id);
     release(lock_of_lst);
   }
   else
@@ -281,7 +273,7 @@ int allocpid()
   return pid;
 }
 
-// +struct proc* 
+// +struct proc*
 // +remove_first(int type, int cpu_id)
 // +{
 // +  struct proc* head = get_head(type, cpu_id);
@@ -300,7 +292,6 @@ int allocpid()
 // +  }
 // +  return head;
 // +}
-
 
 struct proc *
 remove_first(int type, int cpu_id)
@@ -455,35 +446,44 @@ uchar initcode[] = {
 void increase_queue_size(int cpu_id)
 {
   struct cpu *c = &cpus[cpu_id];
-  uint64 old_queue_size;
+  uint64 old_queue_size, new_queue_size;
   do
   {
     old_queue_size = c->ready_queue_size;
-  } while (cas(&c->ready_queue_size, old_queue_size, old_queue_size + 1));
+    new_queue_size = old_queue_size + 1;
+  } while (cas(&c->ready_queue_size, old_queue_size, new_queue_size));
 }
 
 void decrease_queue_size(int cpu_id)
 {
   struct cpu *c = &cpus[cpu_id];
-  uint64 old_queue_size;
+  uint64 old_queue_size, new_queue_size;
   do
   {
     old_queue_size = c->ready_queue_size;
-  } while (cas(&c->ready_queue_size, old_queue_size, old_queue_size - 1));
+    new_queue_size = old_queue_size - 1;
+  } while (cas(&c->ready_queue_size, old_queue_size, new_queue_size));
+}
+
+void initialize_cpus()
+{
+  struct cpu *c;
+  c = cpus;
+  while (c < &cpus[CPU_NUM])
+  {
+    c->ready_head = 0;
+    c->ready_queue_size = 0;
+    c++;
+  }
 }
 
 // Set up first user process.
 void userinit(void)
 {
-  if (!init)
+  if (!initialized)
   {
-    struct cpu *c;
-    for (c = cpus; c < &cpus[CPU_NUM]; c++)
-    {
-      c->ready_head = 0;
-      c->ready_queue_size = 0;
-    }
-    init = 1;
+    initialize_cpus();
+    initialized = TRUE;
   }
 
   struct proc *p;
@@ -596,10 +596,19 @@ int fork(void)
 
   acquire(&np->lock);
   np->state = RUNNABLE;
-  int cpu_id = (BLNCFLG) ? get_min_cpu() : p->cpu_id;
+  int cpu_id;
+  if (BLNCFLG)
+  {
+    cpu_id = get_min_cpu();
+  }
+  else
+  {
+    cpu_id = p->cpu_id;
+  }
   np->cpu_id = cpu_id;
   increase_queue_size(cpu_id);
-  add_process(RL,np, cpu_id);
+
+  add_process(RL, np, cpu_id);
   release(&np->lock);
 
   return pid;
@@ -748,9 +757,9 @@ steal_process()
 //    via swtch back to the scheduler.
 void scheduler(void)
 {
+  int cpu_id = cpuid();
   struct proc *p;
   struct cpu *c = mycpu();
-  int cpu_id = cpuid();
 
   c->proc = 0;
   for (;;)
@@ -758,15 +767,14 @@ void scheduler(void)
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
     p = remove_first(RL, cpu_id);
-    // if empty list
-    if (!p)
+    if (p == 0)
     {
-      if (!BLNCFLG)
+      if (BLNCFLG)
       {
         continue;
       }
       p = steal_process();
-      if (!p)
+      if (p==0)
       {
         continue;
       }
@@ -864,7 +872,7 @@ void sleep(void *chan, struct spinlock *lk)
   p->chan = chan;
   p->state = SLEEPING;
   decrease_queue_size(p->cpu_id);
-  add_process(SL,  p, INVALID_CPU_ID);
+  add_process(SL, p, INVALID_CPU_ID);
 
   sched();
 
@@ -936,7 +944,7 @@ void wakeup(void *chan)
     else
     {
       // we are not on the chan
-      if (p == get_head_for_list(SL,INVALID_CPU_ID))
+      if (p == get_head_for_list(SL, INVALID_CPU_ID))
       {
         release(lock_of_sleeping);
         released_list = 1;
