@@ -683,7 +683,7 @@ void scheduler(void)
     p = remove_from_head(&cpus[cpu_id].ready_head, get_lock(&cpus[cpu_id].ready_head, cpu_id));
     if (p == 0)
     {
-      if (BLNCFLG)
+      if (!BLNCFLG)
       {
         continue;
       }
