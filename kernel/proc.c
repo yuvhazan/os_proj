@@ -996,8 +996,9 @@ void procdump(void)
 
 int set_cpu(int cpu_num)
 {
-  decrease_size(myproc()->cpu_id);
-  myproc()->cpu_id = cpu_num;
+  struct proc * my_proc = myproc();
+  decrease_queue_size(my_proc->cpu_id);
+  my_proc->cpu_id = cpu_num;
   increase_queue_size(cpu_num);
   yield();
   return cpu_num;
