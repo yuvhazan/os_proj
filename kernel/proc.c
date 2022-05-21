@@ -114,29 +114,14 @@ int remove_process(struct proc **head_ptr, struct proc *p)
   struct spinlock *lock = get_lock(head_ptr, p->cpu_id);
   acquire(lock);
   struct proc *head = *head_ptr;
-  if (!head)
-  {
-    release(lock);
-    return 0;
-  }
-  else
+  if (head != 0)
   {
     struct proc *prev = 0;
-    if (p == head)
-    {
-      // remove node, p is the first link
-      acquire(&p->list_lock);
-      *head_ptr=p->next;
-      p->next = 0;
-      release(&p->list_lock);
-      release(lock);
-    }
-    else
+    if (p != head)
     {
       while (head)
       {
         acquire(&head->list_lock);
-
         if (p == head)
         {
           prev->next = head->next;
@@ -152,13 +137,24 @@ int remove_process(struct proc **head_ptr, struct proc *p)
         {
           release(&prev->list_lock);
         }
-
         prev = head;
         head = head->next;
       }
     }
-    return 0;
+    else
+    {
+      acquire(&p->list_lock);
+      *head_ptr=p->next;
+      p->next = 0;
+      release(&p->list_lock);
+      release(lock);
+    }
   }
+  else
+  {
+    release(lock);
+  }
+  return 0;
 }
 
 // initialize the proc table at boot time.
@@ -526,7 +522,7 @@ int fork(void)
   acquire(&np->lock);
   np->state = RUNNABLE;
   int cpu_id;
-  if (BLNCFLG)
+  if (BLNCFLG == TRUE)
   {
     cpu_id = get_min_cpu();
   }
@@ -683,11 +679,9 @@ void scheduler(void)
     p = remove_from_head(&cpus[cpu_id].ready_head, get_lock(&cpus[cpu_id].ready_head, cpu_id));
     if (p == 0)
     {
-      if (!BLNCFLG)
+      if (BLNCFLG)
       {
-        continue;
-      }
-      for (int i = 0; i < CPU_NUM; i++)
+        for (int i = 0; i < CPU_NUM; i++)
       {
         if (cpus[i].ready_queue_size > 1)
         {
@@ -702,6 +696,11 @@ void scheduler(void)
       decrease_queue_size(p->cpu_id);
       p->cpu_id = cpu_id;
       increase_queue_size(cpu_id);
+      }
+      else {
+        continue;
+      }
+      
     }
     acquire(&p->lock);
 
@@ -786,6 +785,7 @@ void sleep(void *chan, struct spinlock *lk)
   // (wakeup locks p->lock),
   // so it's okay to release lk.
 
+  add_process(&sleeping_head, p, get_lock(&sleeping_head, INVALID_CPU_ID));
   acquire(&p->lock); // DOC: sleeplock1
   release(lk);
 
@@ -793,7 +793,6 @@ void sleep(void *chan, struct spinlock *lk)
   p->chan = chan;
   p->state = SLEEPING;
   decrease_queue_size(p->cpu_id);
-  add_process(&sleeping_head, p, get_lock(&sleeping_head, INVALID_CPU_ID));
 
   sched();
 
@@ -809,49 +808,33 @@ void sleep(void *chan, struct spinlock *lk)
 // Must be called without any p->lock.
 void wakeup(void *chan)
 {
-  int released_list = 0;
+  int released = FALSE;
   struct proc *p;
   struct proc *prev = 0;
-  struct proc *tmp;
+  struct proc *link = 0;
   struct spinlock *lock_of_sleeping = get_lock(&sleeping_head, INVALID_CPU_ID);
   acquire(lock_of_sleeping);
   p = sleeping_head;
-  while (p)
+  while (p!=0)
   {
     acquire(&p->lock);
     acquire(&p->list_lock);
     if (p->chan == chan)
     {
-      if (p == sleeping_head)
+      if (p != sleeping_head)
       {
-        sleeping_head = p->next;
-        tmp = p;
-        p = p->next;
-        tmp->next = 0;
-        // add to runnable
-        tmp->state = RUNNABLE;
+        prev->next = p->next;
+        p->next = 0;
+        p->state = RUNNABLE;
         int cpu_id;
-        if (BLNCFLG)
+        if (BLNCFLG == TRUE)
         {
           cpu_id = get_min_cpu();
         }
         else
         {
-          cpu_id = 0;
+          cpu_id = p->cpu_id;
         }
-        tmp->cpu_id = cpu_id;
-        increase_queue_size(cpu_id);
-        add_process(&cpus[cpu_id].ready_head, tmp, get_lock(&cpus[cpu_id].ready_head, cpu_id));
-        release(&tmp->list_lock);
-        release(&tmp->lock);
-      }
-      // we are not on the beginning of the list.
-      else
-      {
-        prev->next = p->next;
-        p->next = 0;
-        p->state = RUNNABLE;
-        int cpu_id = (BLNCFLG) ? get_min_cpu() : p->cpu_id;
         p->cpu_id = cpu_id;
         increase_queue_size(cpu_id);
         add_process(&cpus[cpu_id].ready_head, p, get_lock(&cpus[cpu_id].ready_head, cpu_id));
@@ -859,49 +842,55 @@ void wakeup(void *chan)
         release(&p->lock);
         p = prev->next;
       }
+      else
+      {
+        sleeping_head = p->next;
+        link = p;
+        link->state = RUNNABLE;
+        link->next = 0;
+        p = p->next;
+        int cpu_id;
+        if (BLNCFLG == TRUE)
+        {
+          cpu_id = get_min_cpu();
+        }
+        else
+        {
+          cpu_id = link->cpu_id;
+        }
+        link->cpu_id = cpu_id;
+        increase_queue_size(cpu_id);
+        add_process(&cpus[cpu_id].ready_head, link, get_lock(&cpus[cpu_id].ready_head, cpu_id));
+        release(&link->list_lock);
+        release(&link->lock);
+      }
     }
     else
     {
-      // we are not on the chan
-      if (p == sleeping_head)
-      {
-        release(lock_of_sleeping);
-        released_list = 1;
-      }
-      else
+      if (p != sleeping_head)
       {
         release(&prev->list_lock);
       }
+      else
+      {
+        release(lock_of_sleeping);
+        released = TRUE;
+      }
+      
       release(&(p->lock)); 
       prev = p;
       p = p->next;
     }
   }
-  if (!released_list)
+  if (!released)
   {
     release(lock_of_sleeping);
   }
-  if (prev)
+  if (prev!=0)
   {
     release(&prev->list_lock);
   }
 }
-
-// void
-//  wakeup(void *chan)
-//  {
-//    struct proc *p;
-
-//   for(p = proc; p < &proc[NPROC]; p++) {
-//     if(p != myproc()){
-//       acquire(&p->lock);
-//       if(p->state == SLEEPING && p->chan == chan) {
-//         p->state = RUNNABLE;
-//       }
-//       release(&p->lock);
-//     }
-//   }
-//  }
 
 // Kill the process with the given pid.
 // The victim won't exit until it tries to return
@@ -920,14 +909,19 @@ int kill(int pid)
       {
         // Wake process from sleep().
         p->state = RUNNABLE;
+        release(&p->lock);
         remove_process(&sleeping_head, p);
         add_process(&cpus[p->cpu_id].ready_head, p, get_lock(&cpus[p->cpu_id].ready_head, p->cpu_id));
         increase_queue_size(p->cpu_id);
       }
-      release(&p->lock);
+      else{
+        release(&p->lock);
+      }
       return 0;
     }
-    release(&p->lock);
+    else{
+      release(&p->lock);
+    }
   }
   return -1;
 }
@@ -994,6 +988,8 @@ void procdump(void)
   }
 }
 
+
+
 int set_cpu(int cpu_num)
 {
   struct proc * my_proc = myproc();
@@ -1007,4 +1003,9 @@ int set_cpu(int cpu_num)
 int get_cpu()
 {
   return myproc()->cpu_id;
+}
+
+int
+cpu_process_count(int cpu_num){
+  return cpus[cpu_num].ready_queue_size;
 }

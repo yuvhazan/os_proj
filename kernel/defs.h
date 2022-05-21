@@ -106,6 +106,7 @@ int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
 void            procdump(void);
 int             set_cpu(int cpu_num);
 int             get_cpu(void);
+int             cpu_process_count(int cpu_num);
 
 // swtch.S
 void            swtch(struct context*, struct context*);

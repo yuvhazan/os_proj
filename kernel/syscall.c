@@ -106,6 +106,7 @@ extern uint64 sys_write(void);
 extern uint64 sys_uptime(void);
 extern uint64 sys_get_cpu(void);
 extern uint64 sys_set_cpu(void);
+extern uint64 sys_cpu_process_count(void);
 
 
 static uint64 (*syscalls[])(void) = {
@@ -132,6 +133,7 @@ static uint64 (*syscalls[])(void) = {
 [SYS_close]   sys_close,
 [SYS_get_cpu] sys_get_cpu,
 [SYS_set_cpu]   sys_set_cpu,
+[SYS_cpu_process_count]   sys_cpu_process_count,
 };
 
 void
