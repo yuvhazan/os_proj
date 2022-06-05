@@ -309,12 +309,13 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
+    
     pa = PTE2PA(*pte);
-    
-    if (*pte & PTE_W)
-      *pte = (*pte | PTE_COW) & ~PTE_W;
-    
     flags = (uint)PTE_FLAGS(*pte);
+    flags |= PTE_COW; // turn cow flag on
+    flags &= (~PTE_W); // turn off write flag
+    
+    
     // map the parent's physical page into the child
     if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){
       goto err;

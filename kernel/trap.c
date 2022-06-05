@@ -66,9 +66,8 @@ usertrap(void)
 
     syscall();
   } 
-  else if(r_scause() == 13 || r_scause() == 15) {
-    // get va of the page that caused the fault
-    uint64 va = PGROUNDDOWN(r_stval());
+  else if(r_scause() == 15) {
+    uint64 va = PGROUNDDOWN(r_stval()); // get va of the page that caused the fault
     if(handle_page_fault(p->pagetable, va) != 0){
       p->killed = 1;
     }
@@ -97,24 +96,27 @@ usertrap(void)
 int
 handle_page_fault(pagetable_t pagetable, uint64 va)
 {
-  va = PGROUNDDOWN(va);
-
   if(va >= MAXVA)
     return -1;
 
   pte_t *pte;
+  
   if ((pte = walk(pagetable, va, 0)) == 0)
     return -1;
-  if ((*pte & PTE_V) == 0)
+  
+  if ((*pte & PTE_V) == 0) // pte present
     return -1;
 
-  if ((*pte & PTE_COW) == 0)
+  if ((*pte & PTE_COW) == 0) // if pte is not cow we shouldn't create new page
     return 1;
 
   char *mem;
+  // allocate new page
   if ((mem = kalloc()) != 0) {
     uint64 pa = PTE2PA(*pte);
+    // copy old page to new page
     memmove(mem, (char*)pa, PGSIZE);
+    // define new pte with relevant flags
     *pte = PA2PTE(mem) | ((PTE_FLAGS(*pte) & ~PTE_COW) | PTE_W);
     kfree((void*)pa);
 
