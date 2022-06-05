@@ -100,12 +100,14 @@ int get_ref(void *pa) {
 
 int incr_ref(void *pa) {
   int index = PA2IDX(pa);
-  while(cas(&refs[index], refs[index], refs[index]+1));
+  int val = refs[index];
+  while(cas(&refs[index], val, val+1));
   return refs[index];
 }
 
 int decr_ref(void *pa) {
   int index = PA2IDX(pa);
-  while(cas(&refs[index], refs[index], refs[index]-1));
+  int val = refs[index];
+  while(cas(&refs[index], val, val-1));
   return refs[index];
 }
