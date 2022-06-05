@@ -13,7 +13,6 @@
 void freerange(void *pa_start, void *pa_end);
 
 int refs[NUM_PYS_PAGES];
-struct spinlock r_lock;
 
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
@@ -31,7 +30,6 @@ void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
-  initlock(&r_lock, "refLock");
   memset(refs, 0, sizeof(int)*PA2IDX(PHYSTOP));
   freerange(end, (void*)PHYSTOP);
 }
