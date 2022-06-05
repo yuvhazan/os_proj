@@ -1,4 +1,6 @@
 .global cas
+
+cas:
 # a0 holds address of memory location
 # a1 holds expected value
 # a2 holds desired value

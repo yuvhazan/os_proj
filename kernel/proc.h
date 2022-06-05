@@ -24,7 +24,6 @@ struct cpu {
   struct context context;     // swtch() here to enter scheduler().
   int noff;                   // Depth of push_off() nesting.
   int intena;                 // Were interrupts enabled before push_off()?
-  struct proc *head;          // Head of RUNNABLE list
 };
 
 extern struct cpu cpus[NCPU];
@@ -93,8 +92,6 @@ struct proc {
   int killed;                  // If non-zero, have been killed
   int xstate;                  // Exit status to be returned to parent's wait
   int pid;                     // Process ID
-  struct proc * next;          
-  int cpu_id;
 
   // wait_lock must be held when using this:
   struct proc *parent;         // Parent process
@@ -110,5 +107,4 @@ struct proc {
   char name[16];               // Process name (debugging)
 };
 
-struct proc* remove(struct proc* head, int pid);
-int add(struct proc* head, struct proc *p);
+extern uint64 cas(volatile void *addr, int expected, int newval);

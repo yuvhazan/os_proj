@@ -65,7 +65,15 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if((which_dev = devintr()) != 0){
+  } 
+  else if(r_scause() == 13 || r_scause() == 15) {
+    // get va of the page that caused the fault
+    uint64 va = PGROUNDDOWN(r_stval());
+    if(handle_page_fault(p->pagetable, va) != 0){
+      p->killed = 1;
+    }
+  }
+  else if((which_dev = devintr()) != 0){
     // ok
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
@@ -81,6 +89,39 @@ usertrap(void)
     yield();
 
   usertrapret();
+}
+
+// handle page faults occur on COW
+// create new page and copy old page to new page
+// install new page pte and free old one
+int
+handle_page_fault(pagetable_t pagetable, uint64 va)
+{
+  va = PGROUNDDOWN(va);
+
+  if(va >= MAXVA)
+    return -1;
+
+  pte_t *pte;
+  if ((pte = walk(pagetable, va, 0)) == 0)
+    return -1;
+  if ((*pte & PTE_V) == 0)
+    return -1;
+
+  if ((*pte & PTE_COW) == 0)
+    return 1;
+
+  char *mem;
+  if ((mem = kalloc()) != 0) {
+    uint64 pa = PTE2PA(*pte);
+    memmove(mem, (char*)pa, PGSIZE);
+    *pte = PA2PTE(mem) | ((PTE_FLAGS(*pte) & ~PTE_COW) | PTE_W);
+    kfree((void*)pa);
+
+    return 0;
+  } else {
+    return -1;
+  }
 }
 
 //

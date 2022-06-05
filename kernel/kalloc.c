@@ -8,8 +8,12 @@
 #include "spinlock.h"
 #include "riscv.h"
 #include "defs.h"
+#include "proc.h"
 
 void freerange(void *pa_start, void *pa_end);
+
+int refs[NUM_PYS_PAGES];
+struct spinlock r_lock;
 
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
@@ -27,6 +31,8 @@ void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  initlock(&r_lock, "refLock");
+  memset(refs, 0, sizeof(int)*PA2IDX(PHYSTOP));
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -46,11 +52,15 @@ freerange(void *pa_start, void *pa_end)
 void
 kfree(void *pa)
 {
-  struct run *r;
+   struct run *r;
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
+  if (decr_ref(pa) > 0)
+    return;
+
+  refs[PA2IDX(pa)] = 0;
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
 
@@ -72,11 +82,30 @@ kalloc(void)
 
   acquire(&kmem.lock);
   r = kmem.freelist;
-  if(r)
+
+  if(r) {
+    refs[PA2IDX(r)] = 1;
     kmem.freelist = r->next;
+  }
   release(&kmem.lock);
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
+}
+
+int get_ref(void *pa) {
+  return refs[PA2IDX(pa)];
+}
+
+int incr_ref(void *pa) {
+  int index = PA2IDX(pa);
+  while(cas(&refs[index], refs[index], refs[index]+1));
+  return refs[index];
+}
+
+int decr_ref(void *pa) {
+  int index = PA2IDX(pa);
+  while(cas(&refs[index], refs[index], refs[index]-1));
+  return refs[index];
 }

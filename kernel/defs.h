@@ -63,6 +63,9 @@ void            ramdiskrw(struct buf*);
 void*           kalloc(void);
 void            kfree(void *);
 void            kinit(void);
+int             get_ref(void *pa);
+int             incr_ref(void *pa);
+int             decr_ref(void *pa);
 
 // log.c
 void            initlog(int, struct superblock*);
@@ -104,8 +107,6 @@ void            yield(void);
 int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
 int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
 void            procdump(void);
-int             set_cpu(int cpu_num);
-int             get_cpu(void);
 
 // swtch.S
 void            swtch(struct context*, struct context*);
@@ -147,6 +148,7 @@ void            trapinit(void);
 void            trapinithart(void);
 extern struct spinlock tickslock;
 void            usertrapret(void);
+int             handle_page_fault(pagetable_t pagetable, uint64 va);
 
 // uart.c
 void            uartinit(void);
@@ -169,6 +171,7 @@ void            uvmfree(pagetable_t, uint64);
 void            uvmunmap(pagetable_t, uint64, uint64, int);
 void            uvmclear(pagetable_t, uint64);
 uint64          walkaddr(pagetable_t, uint64);
+pte_t *         walk(pagetable_t pagetable, uint64 va, int alloc);
 int             copyout(pagetable_t, uint64, char *, uint64);
 int             copyin(pagetable_t, char *, uint64, uint64);
 int             copyinstr(pagetable_t, char *, uint64, uint64);
@@ -186,3 +189,6 @@ void            virtio_disk_intr(void);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
+
+#define NUM_PYS_PAGES ((PHYSTOP-KERNBASE) / PGSIZE)
+#define PA2IDX(x) (((uint64)x-KERNBASE) / PGSIZE)
