@@ -106,5 +106,3 @@ struct proc {
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
 };
-
-extern uint64 cas(volatile void *addr, int expected, int newval);

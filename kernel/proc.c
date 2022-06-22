@@ -15,8 +15,6 @@ struct proc *initproc;
 int nextpid = 1;
 struct spinlock pid_lock;
 
-extern uint64 cas(volatile void *addr, int expected, int newval);
-
 extern void forkret(void);
 static void freeproc(struct proc *p);
 
