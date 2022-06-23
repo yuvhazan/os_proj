@@ -672,3 +672,12 @@ nameiparent(char *path, char *name)
 {
   return namex(path, 1, name);
 }
+
+int symlink(const char* oldpath, const char* newpath){
+  return 0;
+}
+
+int
+readlink(const char* path_name, char* buff, int buf_size){
+  return 0;
+}

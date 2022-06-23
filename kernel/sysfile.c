@@ -484,3 +484,33 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64
+sys_symlink(void)
+{
+  char old_path[MAXPATH] , new_path[MAXPATH];
+
+  if(argstr(0, old_path, MAXPATH) < 0)
+    return -1;
+
+  if (argstr(1, new_path, MAXPATH) < 0)
+    return -1;
+
+  return symlink(old_path, new_path);
+}
+
+uint64
+sys_readlink(void)
+{
+  char path[MAXPATH];
+  uint64 buff;
+  int buf_size;
+  if (((argstr(0, path, MAXPATH)) < 0) || (argaddr(1, &buff) < 0) || (argint(2, &buf_size) < 0)){
+    return -1;
+  }
+
+    char * buff_ptr = (char*)buff;
+
+  return readlink(path,buff_ptr, buf_size);
+}
+
