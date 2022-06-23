@@ -20,6 +20,7 @@
 #include "fs.h"
 #include "buf.h"
 #include "file.h"
+#include "create.c"
 
 #define min(a, b) ((a) < (b) ? (a) : (b))
 // there should be one superblock per disk device, but we run with
@@ -673,11 +674,45 @@ nameiparent(char *path, char *name)
   return namex(path, 1, name);
 }
 
-int symlink(const char* oldpath, const char* newpath){
+void
+iunlock_and_end_op(struct inode *ip){
+    iunlock(ip);
+    end_op();
+}
+
+
+int
+symlink(const char* oldpath, const char* newpath){
+  
+  begin_op();
+  struct inode *ip= create((char*)newpath, T_SYMLINK, 0, 0);
+  if((ip == 0)||(writei(ip, 0,(uint64)oldpath, 0, strlen(oldpath)+1) != strlen(oldpath)+1)){    
+    end_op();
+    return -1;
+  }
+  else {
+    iupdate(ip);
+    iunlockput(ip);
+  }
+  end_op();
   return 0;
 }
 
 int
 readlink(const char* path_name, char* buff, int buf_size){
+  struct inode *ip;
+  begin_op();
+  if((ip = namei((char*)path_name)) == 0){
+    end_op();
+    return -1;
+  }
+
+  ilock(ip);
+  if(((*ip).type!=T_SYMLINK) || (readi(ip, 1, (uint64)buff, 0, buf_size) > buf_size) ){
+    iunlock_and_end_op(ip);
+    return -1;
+  }
+
+  iunlock_and_end_op(ip);
   return 0;
 }
