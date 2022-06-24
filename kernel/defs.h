@@ -55,8 +55,7 @@ int             writei(struct inode*, int, uint64, uint, uint);
 void            itrunc(struct inode*);
 int             symlink(const char*, const char*);
 int             readlink(const char*, char*, int);
- 
-
+struct inode*   dereference(struct inode*, int*);
 
 // ramdisk.c
 void            ramdiskinit(void);

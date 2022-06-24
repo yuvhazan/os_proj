@@ -29,6 +29,13 @@ exec(char *path, char **argv)
   }
   ilock(ip);
 
+  int deref = MAX_DEREFERENCE;
+      ip=dereference(ip, &deref);
+      if(ip==0){  
+        end_op();
+        panic("dereference failed\n");
+      }
+
   // Check ELF header
   if(readi(ip, 0, (uint64)&elf, 0, sizeof(elf)) != sizeof(elf))
     goto bad;
