@@ -259,18 +259,30 @@ sys_open(void)
       end_op();
       return -1;
     }
-  } else {
+  } 
+  
+  else {
     if((ip = namei(path)) == 0){
       end_op();
       return -1;
     }
     ilock(ip);
-    if(ip->type == T_DIR && omode != O_RDONLY){
+    if(ip->type == T_DIR && omode){
+      int deref = MAX_DEREFERENCE;
+      ip=dereference(ip, &deref);
+      if(ip==0){  
+        end_op();
+        panic("dereference failed\n");
+      }
+    }
+
+    if(ip->type == T_DIR && !((omode == O_RDONLY) | (omode == O_SYMLINK_IGNORE))){
       iunlockput(ip);
       end_op();
       return -1;
     }
   }
+  
 
   if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
     iunlockput(ip);
@@ -356,6 +368,14 @@ sys_chdir(void)
     return -1;
   }
   ilock(ip);
+
+  int deref = MAX_DEREFERENCE;
+      ip=dereference(ip, &deref);
+      if(ip==0){  
+        end_op();
+        panic("dereference failed\n");
+      }
+
   if(ip->type != T_DIR){
     iunlockput(ip);
     end_op();

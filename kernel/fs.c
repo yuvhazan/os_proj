@@ -673,7 +673,7 @@ skipelem(char *path, char *name)
 // path element into name, which must have room for DIRSIZ bytes.
 // Must be called inside a transaction since it calls iput().
 static struct inode*
-namex(char *path, int nameiparent, char *name)
+namex(char *path, int nameiparent, char *name,int reference_count)
 {
   struct inode *ip, *next;
 
@@ -684,6 +684,11 @@ namex(char *path, int nameiparent, char *name)
 
   while((path = skipelem(path, name)) != 0){
     ilock(ip);
+    ip = dereference(ip, &reference_count);
+    if(ip==0){
+        return 0;
+    }
+
     if(ip->type != T_DIR){
       iunlockput(ip);
       return 0;
@@ -711,13 +716,13 @@ struct inode*
 namei(char *path)
 {
   char name[DIRSIZ];
-  return namex(path, 0, name);
+  return namex(path, 0, name,MAX_DEREFERENCE);
 }
 
 struct inode*
 nameiparent(char *path, char *name)
 {
-  return namex(path, 1, name);
+  return namex(path, 1, name,MAX_DEREFERENCE);
 }
 
 void
@@ -726,10 +731,8 @@ iunlock_and_end_op(struct inode *ip){
     end_op();
 }
 
-
 int
 symlink(const char* oldpath, const char* newpath){
-  
   begin_op();
   struct inode *ip= create((char*)newpath, T_SYMLINK, 0, 0);
   if((ip == 0)||(writei(ip, 0,(uint64)oldpath, 0, strlen(oldpath)+1) != strlen(oldpath)+1)){    
@@ -762,3 +765,29 @@ readlink(const char* path_name, char* buff, int buf_size){
   iunlock_and_end_op(ip);
   return 0;
 }
+
+struct inode*
+dereference(struct inode* ip, int* ref_count)
+{
+  char buffer[MAXPATH];
+  char name[DIRSIZ];
+  while(ip->type == T_SYMLINK){
+    (*ref_count)--;
+    uint64 buffer_uint = (uint64)buffer;
+    if((*ref_count==0)){
+      iunlock(ip);
+      return 0;
+    } else {
+      int r = readi(ip, 0, buffer_uint, 0, MAXPATH);
+      if(r>MAXPATH){
+        iunlock(ip);
+        return 0;
+      }
+    }
+    iunlockput(ip);
+    ip = namex(buffer, 0, name, *ref_count);
+    ilock(ip);
+  }
+  return ip;
+ }
+
