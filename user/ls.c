@@ -28,7 +28,7 @@ fmtname(char *path, int type)
   if(strlen(p) >= DIRSIZ)
     return p;
 
-  char* ar = " --> ";
+  char* ar = "->";
   if(sym){
     memmove(p+strlen(p), ar, strlen(ar));
     memmove(p+strlen(p), name, strlen(name));
@@ -59,7 +59,6 @@ ls(char *path)
   }
 
   char buffer[MAXPATH];
-  printf("%d",st.type);
   switch(st.type){
   case T_FILE:{
     printf("%s %d %d %l\n", fmtname(path,st.type), st.type, st.ino, st.size);
@@ -92,7 +91,7 @@ ls(char *path)
   }
 
   case T_SYMLINK:{
-    printf("%s  -->  %s %d %d %l\n", fmtname(path, st.type), buffer+4, st.type, st.ino, st.size);
+    printf("%s->%s %d %d %l\n", fmtname(path, st.type), buffer+4, st.type, st.ino, st.size);
     break;
   }
   }
